@@ -1,0 +1,6 @@
+{
+  "name": "MikroTik Wi-Fi Payment Hotspot Portal",
+  "description": "An automated captive portal and administrative panel with interactive Tanzanian mobile money simulator (M-Pesa, Airtel, Tigo Pesa) and MikroTik RouterOS integration configuration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
