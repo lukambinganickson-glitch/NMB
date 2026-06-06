@@ -12,6 +12,7 @@ import {
   Coins
 } from "lucide-react";
 import { Analytics } from "@vercel/analytics/react";
+import { SpeedInsights } from "@vercel/speed-insights/react";
 import CaptivePortal from "./components/CaptivePortal";
 import AdminDashboard from "./components/AdminDashboard";
 import { HotspotPackage } from "./types";
@@ -187,6 +188,7 @@ export default function App() {
       </footer>
 
       <Analytics />
+      <SpeedInsights />
     </div>
   );
 }
