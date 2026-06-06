@@ -11,6 +11,7 @@ import {
   Database,
   Coins
 } from "lucide-react";
+import { Analytics } from "@vercel/analytics/react";
 import CaptivePortal from "./components/CaptivePortal";
 import AdminDashboard from "./components/AdminDashboard";
 import { HotspotPackage } from "./types";
@@ -185,6 +186,7 @@ export default function App() {
         </div>
       </footer>
 
+      <Analytics />
     </div>
   );
 }
