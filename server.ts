@@ -15,7 +15,7 @@ interface HotspotPackage {
 interface Transaction {
   id: string;
   phone: string;
-  provider: "mpesa" | "airtel" | "tigo" | "halotel";
+  provider: "mpesa" | "airtel" | "tigo" | "halotel" | "bank";
   packageId: string;
   packageName: string;
   priceTzs: number;
@@ -23,6 +23,7 @@ interface Transaction {
   voucherCode?: string;
   macAddress?: string;
   createdAt: string;
+  operator?: string;
 }
 
 interface Voucher {
@@ -36,6 +37,7 @@ interface Voucher {
   activatedAt?: string;
   expiresAt?: string;
   macAddress?: string;
+  operator?: string;
 }
 
 interface ActiveSession {
@@ -57,6 +59,14 @@ interface RouterConfig {
   interfaceName: string;
   sslEnabled: boolean;
   lastConnected?: string;
+  ispType?: "dhcp" | "pppoe" | "static";
+  ispUsername?: string;
+  ispPassword?: string;
+  ispDnsPrimary?: string;
+  ispDnsSecondary?: string;
+  ispWanIp?: string;
+  ispWanGateway?: string;
+  isConnected?: boolean;
 }
 
 interface ClientSettings {
@@ -66,6 +76,9 @@ interface ClientSettings {
   welcomeQuote: string;
   welcomeText: string;
   contactPhone: string;
+  operatorAccessFee?: number;
+  leaseExponentTimeoutEnabled?: boolean;
+  biometricsEnabled?: boolean;
 }
 
 interface UserAccount {
@@ -74,7 +87,7 @@ interface UserAccount {
   password?: string;
   role: "admin" | "other" | "operator";
   operatorRole?: "senior" | "standard" | "support";
-  status?: "active" | "suspended" | "locked";
+  status?: "active" | "suspended" | "locked" | "unpaid" | "pending";
   permissions?: string[]; // granular operator permissions
   loginHistory?: { ip: string; timestamp: string; location: string; duration: string }[];
   lastAction?: { action: string; timestamp: string };
@@ -185,7 +198,10 @@ const DEFAULT_DB: Database = {
     welcomeTitle: "Welcome to N-Internet",
     welcomeQuote: "Connection fuels opportunity. We believe seamless browsing and reliable internet inspire boundless potential.",
     welcomeText: "Enjoy blazing-fast, high-speed, unlimited access designed to empower your studies, career, and entertainment. Select a customized packages profile below to connect instantly.",
-    contactPhone: "0699302513"
+    contactPhone: "0699302513",
+    operatorAccessFee: 50000,
+    leaseExponentTimeoutEnabled: true,
+    biometricsEnabled: true
   },
   packages: [
     { id: "pkg-1", name: "Short Pass", priceTzs: 500, durationMins: 60, speedLimit: "1M/1M" },
@@ -408,13 +424,44 @@ function writeDB(data: Database) {
   }
 }
 
-// Generate an elegant voucher code: TZ-XXXX
-function generateVoucherCode(): string {
+// Generate a guaranteed unique, elegant voucher code: HOT-XXXXX or MAN-XXXXX (33^5 = 39,135,393 combinations)
+function generateVoucherCode(prefix: "HOT-" | "MAN-" = "HOT-"): string {
   const chars = "123456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // High legibility list
-  let code = "HOT-";
-  for (let i = 0; i < 4; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  let code = "";
+  let isUnique = false;
+  let attempts = 0;
+
+  // Read vouchers to ensure uniqueness
+  let existingCodes = new Set<string>();
+  try {
+    const db = readDB();
+    if (db && db.vouchers) {
+      db.vouchers.forEach((v: any) => {
+        if (v && v.code) {
+          existingCodes.add(v.code.toUpperCase());
+        }
+      });
+    }
+  } catch (err) {
+    console.error("Error reading DB in generateVoucherCode, proceeding with caution:", err);
   }
+
+  while (!isUnique && attempts < 1000) {
+    attempts++;
+    let randomPart = "";
+    for (let i = 0; i < 5; i++) {
+      randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    code = prefix + randomPart;
+    if (!existingCodes.has(code.toUpperCase())) {
+      isUnique = true;
+    }
+  }
+
+  if (!isUnique) {
+    code = prefix + Math.floor(10000 + Math.random() * 90000);
+  }
+
   return code;
 }
 
@@ -451,8 +498,11 @@ async function startServer() {
       id: "usr-" + Date.now(),
       username,
       password: hashPassword(password), // SHA-256 Hashing prevent server DB breach bypass
-      role: "other",
-      profileName: profileName || "Hotspot Partner User",
+      role: "operator", // Operators are the primary registration target
+      operatorRole: "standard",
+      status: "unpaid", // Unpaid access status by default
+      permissions: ["view_users", "view_payments", "create_vouchers", "assist_activation", "view_logs"],
+      profileName: profileName || "Hotspot Partner Operator",
       profilePhone: profilePhone || "0699302513",
       routerBrand: routerBrand || "tplink",
       routerHost: "192.168.0.1",
@@ -470,6 +520,8 @@ async function startServer() {
         id: newUser.id, 
         username: newUser.username, 
         role: newUser.role, 
+        status: newUser.status,
+        permissions: newUser.permissions,
         profileName: newUser.profileName, 
         profilePhone: newUser.profilePhone,
         routerBrand: newUser.routerBrand,
@@ -538,14 +590,13 @@ async function startServer() {
       delete failedLoginAttempts[lockKey];
     }
 
-    if (matched.role === "operator" && (matched.status === "suspended" || matched.status === "locked")) {
-      res.status(403).json({ error: `Operation Denied: This Operator account is currently ${matched.status.toUpperCase()} by the administrator.` });
+    if (matched.role === "operator" && matched.status === "suspended") {
+      res.status(403).json({ error: "Operation Denied: This Operator account is currently SUSPENDED by the administrator. Please contact Root Admin." });
       return;
     }
 
     const sessionToken = crypto.randomBytes(32).toString("hex");
     matched.sessionToken = sessionToken;
-    matched.status = "active"; // Reset to active if log in successfully
 
     if (!matched.loginHistory) matched.loginHistory = [];
     matched.loginHistory.unshift({
@@ -579,6 +630,78 @@ async function startServer() {
         operatorRole: matched.operatorRole || "standard",
         status: matched.status,
         permissions: matched.permissions || ["view_users", "view_payments"],
+        profileName: matched.profileName,
+        profilePhone: matched.profilePhone,
+        routerBrand: matched.routerBrand || "tplink",
+        routerHost: matched.routerHost || "192.168.0.1",
+        routerPort: matched.routerPort || "85",
+        routerUsername: matched.routerUsername || "admin",
+        routerPassword: matched.routerPassword || "",
+        internetName: matched.internetName || "My High Speed Net",
+        biometricRegistered: !!matched.biometricRegistered,
+        loginHistory: matched.loginHistory,
+        lastAction: matched.lastAction,
+        loginTimeLimit: matched.loginTimeLimit,
+        allowedIps: matched.allowedIps,
+        allowedDevices: matched.allowedDevices
+      }
+    });
+  });
+
+  app.post("/api/operators/pay-activate", (req, res) => {
+    const { username, phone, provider } = req.body;
+    if (!username) {
+      res.status(400).json({ error: "Username is required" });
+      return;
+    }
+    const db = readDB();
+    if (!db.users) db.users = [];
+    const matched = db.users.find(u => u.username.toLowerCase() === username.toLowerCase());
+    if (!matched) {
+      res.status(404).json({ error: "User account not found." });
+      return;
+    }
+
+    matched.status = "active"; // Set status to active system-wide!
+
+    // Record the license transaction
+    const price = db.clientSettings?.operatorAccessFee || 50000;
+    const txId = "tx-lic-" + Math.floor(10000 + Math.random() * 90000);
+    const newTx: Transaction = {
+      id: txId,
+      phone: phone || matched.profilePhone || "0754111222",
+      provider: provider || "bank",
+      packageId: "license-fee",
+      packageName: `Operator License Fee (${matched.username})`,
+      priceTzs: price,
+      status: "completed",
+      macAddress: "00:00:00:00:00:00",
+      createdAt: new Date().toISOString()
+    };
+    db.transactions.push(newTx);
+
+    // Append standard success system log
+    if (!db.systemLogs) db.systemLogs = [];
+    db.systemLogs.unshift({
+      id: "log-" + Date.now(),
+      level: "success",
+      timestamp: new Date().toISOString(),
+      message: `[LICENSE PAID] Operator Account '${matched.username}' successfully paid ${price.toLocaleString()} TZS activation fee. Account activated on Root RouterOS system.`,
+      operator: matched.username
+    });
+
+    writeDB(db);
+
+    res.json({
+      success: true,
+      message: "License activated successfully!",
+      user: {
+        id: matched.id,
+        username: matched.username,
+        role: matched.role,
+        operatorRole: matched.operatorRole || "standard",
+        status: matched.status,
+        permissions: matched.permissions || ["view_users", "view_payments", "create_vouchers", "assist_activation", "view_logs"],
         profileName: matched.profileName,
         profilePhone: matched.profilePhone,
         routerBrand: matched.routerBrand || "tplink",
@@ -1075,8 +1198,14 @@ async function startServer() {
 
   // SYSTEM AUDIT LOGS
   app.get("/api/system-logs", (req, res) => {
+    const { role, username } = req.query;
     const db = readDB();
-    res.json(db.systemLogs || []);
+    if (role === "operator" && username) {
+      const filtered = (db.systemLogs || []).filter(l => l.operator && l.operator.toLowerCase() === (username as string).toLowerCase());
+      res.json(filtered);
+    } else {
+      res.json(db.systemLogs || []);
+    }
   });
 
   app.delete("/api/system-logs", (req, res) => {
@@ -1333,7 +1462,11 @@ async function startServer() {
   });
 
   app.post("/api/router-link", (req, res) => {
-    const { host, port, username, password, interfaceName, sslEnabled } = req.body;
+    const { 
+      host, port, username, password, interfaceName, sslEnabled,
+      ispType, ispUsername, ispPassword, ispDnsPrimary, ispDnsSecondary,
+      ispWanIp, ispWanGateway, isConnected
+    } = req.body;
     const db = readDB();
     db.routerConfig = {
       host: host || "192.168.88.1",
@@ -1342,8 +1475,82 @@ async function startServer() {
       password: password || "",
       interfaceName: interfaceName || "ether1-gateway",
       sslEnabled: !!sslEnabled,
+      ispType: ispType || "dhcp",
+      ispUsername: ispUsername || "",
+      ispPassword: ispPassword || "",
+      ispDnsPrimary: ispDnsPrimary || "8.8.8.8",
+      ispDnsSecondary: ispDnsSecondary || "1.1.1.1",
+      ispWanIp: ispWanIp || "",
+      ispWanGateway: ispWanGateway || "",
+      isConnected: isConnected !== undefined ? !!isConnected : (db.routerConfig?.isConnected || false),
       lastConnected: new Date().toISOString()
     };
+    writeDB(db);
+    res.json({ success: true, routerConfig: db.routerConfig });
+  });
+
+  app.post("/api/router-link/connect", (req, res) => {
+    const { 
+      host, port, username, password, interfaceName, sslEnabled,
+      ispType, ispUsername, ispPassword, ispDnsPrimary, ispDnsSecondary,
+      ispWanIp, ispWanGateway
+    } = req.body;
+    const db = readDB();
+    db.routerConfig = {
+      host: host || "192.168.88.1",
+      port: port || "8728",
+      username: username || "admin",
+      password: password || "",
+      interfaceName: interfaceName || "ether1-gateway",
+      sslEnabled: !!sslEnabled,
+      ispType: ispType || "dhcp",
+      ispUsername: ispUsername || "",
+      ispPassword: ispPassword || "",
+      ispDnsPrimary: ispDnsPrimary || "8.8.8.8",
+      ispDnsSecondary: ispDnsSecondary || "1.1.1.1",
+      ispWanIp: ispWanIp || "",
+      ispWanGateway: ispWanGateway || "",
+      isConnected: true,
+      lastConnected: new Date().toISOString()
+    };
+    
+    if (!db.systemLogs) db.systemLogs = [];
+    db.systemLogs.unshift({
+      id: "log-" + Date.now(),
+      level: "success",
+      timestamp: new Date().toISOString(),
+      message: `[ISP CONNECTED] Full handshake authorized. Connected to MikroTik Board at '${db.routerConfig.host}' inside interface ${db.routerConfig.interfaceName} and ISP WAN Server over ${db.routerConfig.ispType?.toUpperCase()} Gateway protocol. Dynamic DNS updated successfully.`,
+      operator: "system"
+    });
+    writeDB(db);
+    res.json({ 
+      success: true, 
+      message: `Successfully connected to N-Internet ISP WAN Server and MikroTik RouterOS API on ${db.routerConfig.host}:${db.routerConfig.port}! Network bridges are established.`,
+      routerConfig: db.routerConfig 
+    });
+  });
+
+  app.post("/api/router-link/disconnect", (req, res) => {
+    const db = readDB();
+    if (!db.routerConfig) {
+      db.routerConfig = { 
+        host: "192.168.88.1", 
+        port: "8728", 
+        username: "admin", 
+        interfaceName: "ether1-gateway", 
+        sslEnabled: false 
+      };
+    }
+    db.routerConfig.isConnected = false;
+    
+    if (!db.systemLogs) db.systemLogs = [];
+    db.systemLogs.unshift({
+      id: "log-" + Date.now(),
+      level: "warning",
+      timestamp: new Date().toISOString(),
+      message: `[ISP DISCONNECTED] Operator manually disconnected Router & ISP bridge pipeline. Client captive portals have been suspended.`,
+      operator: "system"
+    });
     writeDB(db);
     res.json({ success: true, routerConfig: db.routerConfig });
   });
@@ -1500,13 +1707,19 @@ async function startServer() {
 
   // C. Manage Vouchers (Admin)
   app.get("/api/vouchers", (req, res) => {
+    const { role, username } = req.query;
     const db = readDB();
-    res.json(db.vouchers);
+    if (role === "operator" && username) {
+      const filtered = db.vouchers.filter(v => v.operator && v.operator.toLowerCase() === (username as string).toLowerCase());
+      res.json(filtered);
+    } else {
+      res.json(db.vouchers);
+    }
   });
 
   // Create Voucher manually or activate a client
   app.post("/api/vouchers/create-manual", (req, res) => {
-    const { packageId, macAddress } = req.body;
+    const { packageId, macAddress, operator } = req.body;
     if (!packageId) {
       res.status(400).json({ error: "packageId is required" });
       return;
@@ -1518,7 +1731,7 @@ async function startServer() {
       return;
     }
 
-    const voucherCode = "MAN-" + Math.floor(1000 + Math.random() * 9000);
+    const voucherCode = generateVoucherCode("MAN-");
     const resolvedMac = macAddress ? macAddress.trim().toUpperCase() : "00:00:00:00:00:00";
 
     const newVoucher: Voucher = {
@@ -1531,7 +1744,8 @@ async function startServer() {
       createdAt: new Date().toISOString(),
       activatedAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + selectedPkg.durationMins * 60 * 1000).toISOString(),
-      macAddress: resolvedMac
+      macAddress: resolvedMac,
+      operator: operator || undefined
     };
 
     db.vouchers.push(newVoucher);
@@ -1555,6 +1769,7 @@ async function startServer() {
 
   // D. Active Hotspot Sessions
   app.get("/api/active-sessions", (req, res) => {
+    const { role, username } = req.query;
     const db = readDB();
     // Simulate minor progress in network bytes counters
     const updatedSessions = db.activeSessions.map(session => {
@@ -1572,12 +1787,27 @@ async function startServer() {
     db.activeSessions = updatedSessions;
     writeDB(db);
 
-    res.json(updatedSessions);
+    if (role === "operator" && username) {
+      const targetUser = (username as string).toLowerCase();
+      const filtered = updatedSessions.filter(s => {
+        const v = db.vouchers.find(vch => vch.code === s.username);
+        return v && v.operator && v.operator.toLowerCase() === targetUser;
+      });
+      res.json(filtered);
+    } else {
+      res.json(updatedSessions);
+    }
   });
 
   app.get("/api/transactions", (req, res) => {
+    const { role, username } = req.query;
     const db = readDB();
-    res.json(db.transactions || []);
+    if (role === "operator" && username) {
+      const filtered = (db.transactions || []).filter(t => t.operator && t.operator.toLowerCase() === (username as string).toLowerCase());
+      res.json(filtered);
+    } else {
+      res.json(db.transactions || []);
+    }
   });
 
   app.post("/api/active-sessions/disconnect", (req, res) => {
@@ -1601,8 +1831,22 @@ async function startServer() {
 
   // E. Analytics/Dashboard data
   app.get("/api/stats", (req, res) => {
+    const { role, username } = req.query;
     const db = readDB();
-    const transactions = db.transactions;
+    let transactions = db.transactions || [];
+    let vouchers = db.vouchers || [];
+    let activeSessions = db.activeSessions || [];
+
+    if (role === "operator" && username) {
+      const targetUser = (username as string).toLowerCase();
+      transactions = transactions.filter(t => t.operator && t.operator.toLowerCase() === targetUser);
+      vouchers = vouchers.filter(v => v.operator && v.operator.toLowerCase() === targetUser);
+      activeSessions = activeSessions.filter(s => {
+        const v = db.vouchers.find(vch => vch.code === s.username);
+        return v && v.operator && v.operator.toLowerCase() === targetUser;
+      });
+    }
+
     const completedTx = transactions.filter(t => t.status === "completed");
 
     // Calculate revenue totals
@@ -1614,7 +1858,7 @@ async function startServer() {
     const aggregateRevenue = completedTx.reduce((sum, t) => sum + t.priceTzs, 0);
 
     // Active sessions list count
-    const activeClientsCount = db.activeSessions.length;
+    const activeClientsCount = activeSessions.length;
 
     // Hourly statistics mapping
     const hourlyRevenue = Array.from({ length: 12 }, (_, i) => {
@@ -1629,29 +1873,30 @@ async function startServer() {
 
       return {
         time: `${keyHour}:00`,
-        revenue: revenue || (i * 500) // fallback mock variation for graph layout realism
+        revenue: revenue || (role === "operator" ? 0 : i * 500) // no mock fallback padding for operators to keep their records strictly accurate!
       };
     });
 
     // Device breakdown simulation
     const deviceStats = [
-      { name: "Android Devices", value: Math.max(2, Math.floor(activeClientsCount * 0.55)) },
-      { name: "iPhones / iPads", value: Math.max(1, Math.floor(activeClientsCount * 0.30)) },
-      { name: "Windows / MacBooks", value: Math.max(1, Math.floor(activeClientsCount * 0.15)) }
+      { name: "Android Devices", value: Math.max(0, Math.floor(activeClientsCount * 0.55)) },
+      { name: "iPhones / iPads", value: Math.max(0, Math.floor(activeClientsCount * 0.30)) },
+      { name: "Windows / MacBooks", value: Math.max(0, Math.floor(activeClientsCount * 0.15)) }
     ];
 
     res.json({
       revenueToday: totalTodayRevenue,
       revenueAllTime: aggregateRevenue,
       activeUsers: activeClientsCount,
-      totalVouchers: db.vouchers.length,
+      totalVouchers: vouchers.length,
       hourlyRevenueChart: hourlyRevenue,
       devicePieChart: deviceStats,
       paymentDistribution: {
         mpesa: completedTx.filter(t => t.provider === "mpesa").reduce((s, t) => s + t.priceTzs, 0),
         airtel: completedTx.filter(t => t.provider === "airtel").reduce((s, t) => s + t.priceTzs, 0),
         tigo: completedTx.filter(t => t.provider === "tigo").reduce((s, t) => s + t.priceTzs, 0),
-        halotel: completedTx.filter(t => t.provider === "halotel").reduce((s, t) => s + t.priceTzs, 0)
+        halotel: completedTx.filter(t => t.provider === "halotel").reduce((s, t) => s + t.priceTzs, 0),
+        bank: completedTx.filter(t => t.provider === "bank").reduce((s, t) => s + t.priceTzs, 0)
       }
     });
   });

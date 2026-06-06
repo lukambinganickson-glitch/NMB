@@ -11,7 +11,6 @@ import {
   Database,
   Coins
 } from "lucide-react";
-import { Analytics } from "@vercel/analytics/react";
 import CaptivePortal from "./components/CaptivePortal";
 import AdminDashboard from "./components/AdminDashboard";
 import { HotspotPackage } from "./types";
@@ -20,6 +19,14 @@ export default function App() {
   const [packages, setPackages] = useState<HotspotPackage[]>([]);
   const [triggerDataSync, setTriggerDataSync] = useState<number>(0);
   const [viewMode, setViewMode] = useState<"both" | "client" | "admin">("both");
+  const [isIspConnected, setIsIspConnected] = useState<boolean>(false);
+  const [currentUser, setCurrentUser] = useState<any>(() => {
+    const saved = localStorage.getItem("hotspot_auth_user");
+    if (saved) {
+      try { return JSON.parse(saved); } catch { return null; }
+    }
+    return null;
+  });
 
   // Fetch all internet billing packages on start
   const fetchPackages = async () => {
@@ -27,20 +34,52 @@ export default function App() {
       const res = await fetch("/api/packages");
       const data = await res.json();
       setPackages(data);
+      // Synchronize live ISP isConnected state to toggle layouts instantly
+      fetchRouterStatus();
     } catch (err) {
       console.error("Failed to load billing packages.", err);
     }
   };
 
+  const fetchRouterStatus = async () => {
+    try {
+      const res = await fetch("/api/router-link");
+      if (res.ok) {
+        const data = await res.json();
+        setIsIspConnected(!!data.isConnected);
+      }
+    } catch (err) {
+      console.error("Failed to load router connection status.", err);
+    }
+  };
+
   useEffect(() => {
     fetchPackages();
-  }, []);
+    fetchRouterStatus();
+  }, [triggerDataSync]);
 
   // Callback triggered when a mobile money simulator payment resolves
   const handlePaymentSuccess = () => {
     // Increment statistical synchronizer state to force reload metrics
     setTriggerDataSync((prev) => prev + 1);
   };
+
+  const isOperatorUnpaid = currentUser && currentUser.role === "operator" && currentUser.status !== "active";
+
+  if (isOperatorUnpaid) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-amber-400 selection:text-slate-950 transition-all justify-center items-center p-4">
+        <div className="w-full max-w-2xl">
+          <AdminDashboard 
+            packages={packages} 
+            onRefreshPackages={fetchPackages}
+            triggerDataSync={triggerDataSync}
+            onUserChange={setCurrentUser}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-105 font-sans flex flex-col antialiased">
@@ -74,34 +113,43 @@ export default function App() {
 
           {/* Interactive Screen Layout Mode Switcher */}
           <div className="flex items-center space-x-2 bg-slate-950 p-1.5 rounded-xl border border-slate-850">
-            <button
-              onClick={() => setViewMode("both")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                viewMode === "both" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              Dual Split View
-            </button>
-            <button
-              onClick={() => setViewMode("client")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                viewMode === "client" ? "bg-amber-500 text-slate-950" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              📱 Mobile Portal Only
-            </button>
-            <button
-              onClick={() => setViewMode("admin")}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                viewMode === "admin" ? "bg-amber-500 text-slate-950" : "text-slate-400 hover:text-white"
-              }`}
-            >
-              ⚙ Admin Console Only
-            </button>
+            {!isIspConnected ? (
+              <div className="px-3.5 py-1.5 text-[10px] font-mono font-extrabold text-amber-500 uppercase flex items-center gap-1.5 select-none animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                ISP Connection Required (Mobile Simulator Hidden)
+              </div>
+            ) : (
+              <>
+                <button
+                  onClick={() => setViewMode("both")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    viewMode === "both" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  Dual Split View
+                </button>
+                <button
+                  onClick={() => setViewMode("client")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    viewMode === "client" ? "bg-amber-500 text-slate-950" : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  📱 Mobile Portal Only
+                </button>
+                <button
+                  onClick={() => setViewMode("admin")}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    viewMode === "admin" ? "bg-amber-500 text-slate-950" : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  ⚙ Admin Console Only
+                </button>
+              </>
+            )}
           </div>
         </div>
       </header>
-
+ 
       {/* Main Sandbox Workspace Grid */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-6 lg:p-8 flex flex-col">
         
@@ -116,17 +164,17 @@ export default function App() {
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2 text-xs text-slate-400 font-mono shrink-0">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span>REST API Endpoint Listening</span>
+          <div className="flex items-center gap-2 text-xs text-slate-450 font-mono shrink-0">
+            <span className={`w-2 h-2 rounded-full ${isIspConnected ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></span>
+            <span>{isIspConnected ? 'Core ISP & MikroTik Active' : 'Offline: No Connection'}</span>
           </div>
         </div>
-
+ 
         {/* Workspace Layout rendering depending on Toggle choices */}
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
           
           {/* Column A: Simulated User Mobile Phone Captive Portal */}
-          {(viewMode === "both" || viewMode === "client") && (
+          {isIspConnected && (viewMode === "both" || viewMode === "client") && (
             <div className={`${
               viewMode === "both" ? "lg:col-span-4" : "lg:col-span-12"
             } flex flex-col items-center justify-start`}>
@@ -151,20 +199,22 @@ export default function App() {
               </p>
             </div>
           )}
-
+ 
           {/* Column B: Professional System Administration console */}
-          {(viewMode === "both" || viewMode === "admin") && (
+          {(!isIspConnected || viewMode === "both" || viewMode === "admin") && (
             <div className={`${
-              viewMode === "both" ? "lg:col-span-8" : "lg:col-span-12"
+              !isIspConnected ? "lg:col-span-12" : (viewMode === "both" ? "lg:col-span-8" : "lg:col-span-12")
             } flex flex-col`}>
               <AdminDashboard 
                 packages={packages} 
                 onRefreshPackages={fetchPackages}
                 triggerDataSync={triggerDataSync}
+                onUserChange={setCurrentUser}
+                isIspConnected={isIspConnected}
               />
             </div>
           )}
-
+ 
         </div>
 
       </main>
@@ -186,7 +236,6 @@ export default function App() {
         </div>
       </footer>
 
-      <Analytics />
     </div>
   );
 }

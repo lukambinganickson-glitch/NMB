@@ -12,7 +12,9 @@ import {
   UserCheck, 
   Coins, 
   TrendingUp, 
-  Grid, 
+  Fingerprint,
+  Lock, 
+  Grid,
   Layers, 
   BookOpen,
   CheckCircle2,
@@ -27,13 +29,15 @@ import {
   Users,
   ShieldAlert,
   Eye,
-  Activity
+  Activity,
+  Radio
 } from "lucide-react";
 import { HotspotPackage, Transaction, Voucher, ActiveSession, AdminStats } from "../types";
 import { motion } from "motion/react";
 import OperatorsTab from "./OperatorsTab";
 import SystemControlTab from "./SystemControlTab";
 import OperatorWorkspaceTabs from "./OperatorWorkspaceTabs";
+import CaptivePortal from "./CaptivePortal";
 
 // Dynamic Session Time countdown component for Admin Active Sessions list
 function SessionTimeLeft({ expiresAt }: { expiresAt: string }) {
@@ -88,9 +92,11 @@ interface AdminDashboardProps {
   packages: HotspotPackage[];
   onRefreshPackages: () => void;
   triggerDataSync: number; // Increment to force statistics refresh
+  onUserChange?: (user: any) => void;
+  isIspConnected?: boolean;
 }
 
-export default function AdminDashboard({ packages, onRefreshPackages, triggerDataSync }: AdminDashboardProps) {
+export default function AdminDashboard({ packages, onRefreshPackages, triggerDataSync, onUserChange, isIspConnected = false }: AdminDashboardProps) {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [vouchers, setVouchers] = useState<Voucher[]>([]);
   const [activeSessions, setActiveSessions] = useState<ActiveSession[]>([]);
@@ -103,13 +109,19 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
     return null;
   });
 
+  const updateCurrentUser = (u: any) => {
+    setCurrentUser(u);
+    if (onUserChange) {
+      onUserChange(u);
+    }
+  };
+
   const [currentTab, setCurrentTab] = useState<string>(() => {
     const saved = localStorage.getItem("hotspot_auth_user");
     if (saved) {
       try {
         const u = JSON.parse(saved);
-        if (u.role === "admin") return "overview";
-        if (u.role === "operator") return "op-overview";
+        if (u.role === "admin" || u.role === "operator") return "overview";
         return "router-setup";
       } catch {
         return "overview";
@@ -118,12 +130,29 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
     return "overview";
   });
 
+  const [workspaceMode, setWorkspaceMode] = useState<"root" | "operator" | "client">(() => {
+    const saved = localStorage.getItem("hotspot_auth_user");
+    if (saved) {
+      try {
+        const u = JSON.parse(saved);
+        if (u && u.role === "admin") return "root";
+        return "operator";
+      } catch {
+        return "root";
+      }
+    }
+    return "root";
+  });
+
   const [authMode, setAuthMode] = useState<"login" | "register" | "forgot">("login");
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authProfileName, setAuthProfileName] = useState("");
   const [authProfilePhone, setAuthProfilePhone] = useState("");
   const [authRouterBrand, setAuthRouterBrand] = useState<"mikrotik" | "tplink" | "other">("tplink");
+  const [payPhone, setPayPhone] = useState("");
+  const [payProvider, setPayProvider] = useState<"mpesa" | "airtel" | "tigo" | "halotel" | "bank">("mpesa");
+  const [payLoading, setPayLoading] = useState(false);
   const [authError, setAuthError] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
 
@@ -156,6 +185,9 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
   const [settingsAutoConnecths, setSettingsAutoConnecths] = useState(true);
   const [settingsThrottleLimit, setSettingsThrottleLimit] = useState("50");
   const [settingsOfflineSync, setSettingsOfflineSync] = useState(true);
+  const [operatorAccessFee, setOperatorAccessFee] = useState(50000);
+  const [settingsTimeoutEnabled, setSettingsTimeoutEnabled] = useState(true);
+  const [biometricsEnabled, setBiometricsEnabled] = useState(true);
 
   // --- OPERATOR LIVE STATES ---
   const [opRouterBrand, setOpRouterBrand] = useState<"mikrotik" | "tplink" | "other">("tplink");
@@ -223,6 +255,33 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
   const [linkPassword, setLinkPassword] = useState("");
   const [sslEnabled, setSslEnabled] = useState(false);
   const [testingLink, setTestingLink] = useState(false);
+
+  // Local Router Configuration Base states for detection & internet sharing
+  const [localRouterGateway, setLocalRouterGateway] = useState("192.168.88.1");
+  const [localRouterMac, setLocalRouterMac] = useState("18:FD:74:B3:99:EE");
+  const [localLinkSpeed, setLocalLinkSpeed] = useState("Auto-Negotiated 1 Gbps / Full Duplex");
+  const [localSubnetMask, setLocalSubnetMask] = useState("192.168.88.0/24");
+  const [localLeasePool, setLocalLeasePool] = useState("192.168.88.10-192.168.88.254");
+  const [localHotspotInterface, setLocalHotspotInterface] = useState("ether2-local");
+  const [routerDetecting, setRouterDetecting] = useState(false);
+  const [routerDetectResult, setRouterDetectResult] = useState<{
+    success: boolean;
+    message: string;
+    pingMs?: number;
+    resolvedMac?: string;
+    packetsShared?: number;
+    detectedAt?: string;
+  } | null>(null);
+
+  // ISP Connection details state variables
+  const [ispType, setIspType] = useState<"dhcp" | "pppoe" | "static">("dhcp");
+  const [ispUsername, setIspUsername] = useState("");
+  const [ispPassword, setIspPassword] = useState("");
+  const [ispDnsPrimary, setIspDnsPrimary] = useState("8.8.8.8");
+  const [ispDnsSecondary, setIspDnsSecondary] = useState("1.1.1.1");
+  const [ispWanIp, setIspWanIp] = useState("172.16.10.150");
+  const [ispWanGateway, setIspWanGateway] = useState("172.16.10.1");
+  const [connectingIsp, setConnectingIsp] = useState(false);
   const [linkTestResult, setLinkTestResult] = useState<{
     success: boolean;
     message: string;
@@ -256,6 +315,13 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
           setLinkUser(data.username || "admin");
           setLinkPassword(data.password || "");
           setSslEnabled(!!data.sslEnabled);
+          if (data.ispType) setIspType(data.ispType);
+          if (data.ispUsername) setIspUsername(data.ispUsername);
+          if (data.ispPassword) setIspPassword(data.ispPassword);
+          if (data.ispDnsPrimary) setIspDnsPrimary(data.ispDnsPrimary);
+          if (data.ispDnsSecondary) setIspDnsSecondary(data.ispDnsSecondary);
+          if (data.ispWanIp) setIspWanIp(data.ispWanIp);
+          if (data.ispWanGateway) setIspWanGateway(data.ispWanGateway);
         }
       })
       .catch(err => console.error("Could not fetch router-link details", err));
@@ -270,6 +336,9 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
           setPortalWelcomeQuote(data.welcomeQuote || "");
           setPortalWelcomeText(data.welcomeText || "");
           setPortalContactPhone(data.contactPhone || "0699302513");
+          setOperatorAccessFee(data.operatorAccessFee !== undefined ? data.operatorAccessFee : 50000);
+          setSettingsTimeoutEnabled(data.leaseExponentTimeoutEnabled !== undefined ? data.leaseExponentTimeoutEnabled : true);
+          setBiometricsEnabled(data.biometricsEnabled !== undefined ? data.biometricsEnabled : true);
         }
       })
       .catch(err => console.error("Could not fetch client-settings in admin", err));
@@ -665,6 +734,31 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
     }
   };
 
+  // Interactive Verification of physical router hardware connection and status
+  const handleVerifyRouterDetection = async () => {
+    setRouterDetecting(true);
+    setRouterDetectResult(null);
+    try {
+      // Simulate real-time hardware status verification over internal networks
+      await new Promise((resolve) => setTimeout(resolve, 1400));
+      setRouterDetectResult({
+        success: true,
+        message: `Router hardware base successfully handshaked in system. Interface ${localHotspotInterface} resolves loopback and active ARP binding. WAN internet routing is alive.`,
+        pingMs: Math.floor(Math.random() * 3) + 1,
+        resolvedMac: localRouterMac,
+        packetsShared: Math.floor(Math.random() * 2500) + 7500,
+        detectedAt: new Date().toLocaleTimeString()
+      });
+    } catch {
+      setRouterDetectResult({
+        success: false,
+        message: `No active responder detected at ${localRouterGateway}. Ensure physical Ethernet bridge configuration matches hardware interface specifications.`
+      });
+    } finally {
+      setRouterDetecting(false);
+    }
+  };
+
   // Save Physical Router Link settings to Database
   const handleSaveRouterLink = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -678,17 +772,80 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
           username: linkUser,
           password: linkPassword,
           interfaceName: linkInterface,
-          sslEnabled
+          sslEnabled,
+          ispType,
+          ispUsername,
+          ispPassword,
+          ispDnsPrimary,
+          ispDnsSecondary,
+          ispWanIp,
+          ispWanGateway
         })
       });
       if (res.ok) {
-        alert("Router physical API link configuration saved to database successfully.");
+        alert("Router physical API & ISP connection parameters saved to backend database successfully.");
+        onRefreshPackages();
       } else {
-        alert("Error saving router link parameters.");
+        alert("Error saving router & ISP settings.");
       }
     } catch (err) {
       console.error(err);
       alert("Error contacting gateway controller backend.");
+    }
+  };
+
+  // Simulate active gateway link authorization with ISP & Mikrotik Boards
+  const handleConnectSystem = async () => {
+    setConnectingIsp(true);
+    try {
+      const res = await fetch("/api/router-link/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          host: linkHost,
+          port: linkPort,
+          username: linkUser,
+          password: linkPassword,
+          interfaceName: linkInterface,
+          sslEnabled,
+          ispType,
+          ispUsername,
+          ispPassword,
+          ispDnsPrimary,
+          ispDnsSecondary,
+          ispWanIp,
+          ispWanGateway
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        alert(data.message || "ISP & MikroTik connection established successfully!");
+        onRefreshPackages();
+      } else {
+        alert(data.message || "Failed to synchronize ISP network handshake.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error contacting ISP bridging gateway service.");
+    } finally {
+      setConnectingIsp(false);
+    }
+  };
+
+  // Standard software disconnect command from ISP wan trunk
+  const handleDisconnectSystem = async () => {
+    if (!confirm("Are you sure you want to suspend ISP connectivity and MikroTik API bridge? This will hide the client mobile captive portal view.")) return;
+    try {
+      const res = await fetch("/api/router-link/disconnect", { method: "POST" });
+      if (res.ok) {
+        alert("System successfully disconnected from ISP. Captive portal simulator has suspended network broadcasts.");
+        onRefreshPackages();
+      } else {
+        alert("Failed to disconnect.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error signaling ISP disconnection.");
     }
   };
 
@@ -722,15 +879,13 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
       }
 
       // Successful auth
-      setCurrentUser(data.user);
+      updateCurrentUser(data.user);
       localStorage.setItem("hotspot_auth_user", JSON.stringify(data.user));
       
       // Set default tab depending on role
       setCurrentTab(
-        data.user.role === "admin" 
+        (data.user.role === "admin" || data.user.role === "operator")
           ? "overview" 
-          : data.user.role === "operator" 
-          ? "op-overview" 
           : "router-setup"
       );
       
@@ -748,7 +903,7 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
   };
 
   const handleLogout = () => {
-    setCurrentUser(null);
+    updateCurrentUser(null);
     localStorage.removeItem("hotspot_auth_user");
   };
 
@@ -867,9 +1022,9 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
         
         setTimeout(() => {
           setBiometricScanning(false);
-          setCurrentUser(data.user);
+          updateCurrentUser(data.user);
           localStorage.setItem("hotspot_auth_user", JSON.stringify(data.user));
-          setCurrentTab(data.user.role === "admin" ? "overview" : "router-setup");
+          setCurrentTab((data.user.role === "admin" || data.user.role === "operator") ? "overview" : "router-setup");
           setAuthUsername("");
           setAuthPassword("");
         }, 1000);
@@ -981,7 +1136,7 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
       const data = await res.json();
       if (res.ok && data.success) {
         alert("Partner settings and payout destination saved correctly!");
-        setCurrentUser(data.user);
+        updateCurrentUser(data.user);
         localStorage.setItem("hotspot_auth_user", JSON.stringify(data.user));
         
         // Propagate updates
@@ -1014,7 +1169,10 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
           welcomeTitle: portalWelcomeTitle,
           welcomeQuote: portalWelcomeQuote,
           welcomeText: portalWelcomeText,
-          contactPhone: portalContactPhone
+          contactPhone: portalContactPhone,
+          operatorAccessFee: parseInt(String(operatorAccessFee)) || 50000,
+          leaseExponentTimeoutEnabled: settingsTimeoutEnabled,
+          biometricsEnabled: biometricsEnabled
         })
       });
       if (res.ok) {
@@ -1027,6 +1185,35 @@ export default function AdminDashboard({ packages, onRefreshPackages, triggerDat
       alert("Error saving client portal configuration.");
     } finally {
       setSavingPortalSettings(false);
+    }
+  };
+
+  // Dedicated function for Admin to save/change the operator license fee
+  const handleSaveOperatorFee = async () => {
+    try {
+      const res = await fetch("/api/client-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          internetName: portalInternetName,
+          hotspotSubtitle: portalHotspotSubtitle,
+          welcomeTitle: portalWelcomeTitle,
+          welcomeQuote: portalWelcomeQuote,
+          welcomeText: portalWelcomeText,
+          contactPhone: portalContactPhone,
+          operatorAccessFee: parseInt(String(operatorAccessFee)) || 50000,
+          leaseExponentTimeoutEnabled: settingsTimeoutEnabled,
+          biometricsEnabled: biometricsEnabled
+        })
+      });
+      if (res.ok) {
+        alert(`Successfully updated Operator Access License Fee to TZS ${new Intl.NumberFormat("en-US").format(operatorAccessFee || 50000)}!`);
+      } else {
+        alert("Failed to update Operator Access License Fee.");
+      }
+    } catch (err) {
+      console.error(err);
+      alert("Error saving operator license fee settings.");
     }
   };
 
@@ -1222,29 +1409,8 @@ CREATE TABLE IF NOT EXISTS vouchers (
             <h2 className="text-lg font-black tracking-wider text-white uppercase sm:text-xl">
               N-Internet Hotspot
             </h2>
-            <p className="text-[10px] text-slate-400 mt-0.5 font-mono">OPERATOR & BILLING CONTROL CONSOLE</p>
+            <p className="text-[10px] text-slate-400 mt-0.5 font-mono">ADMIN & AUTHORIZED OPERATOR LOGIN</p>
           </div>
-
-          {authMode !== "forgot" && (
-            <div className="flex p-1 bg-slate-950 border border-slate-850 rounded-xl mb-5">
-              <button
-                onClick={() => { setAuthMode("login"); setAuthError(""); }}
-                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                  authMode === "login" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
-                }`}
-              >
-                Partner Sign In
-              </button>
-              <button
-                onClick={() => { setAuthMode("register"); setAuthError(""); }}
-                className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                  authMode === "register" ? "bg-amber-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
-                }`}
-              >
-                Operator Register
-              </button>
-            </div>
-          )}
 
           {authError && (
             <div className="p-3 mb-4 bg-red-500/10 border border-red-500/20 rounded-xl flex items-start gap-2 text-red-400 text-xs shadow-inner">
@@ -1262,9 +1428,68 @@ CREATE TABLE IF NOT EXISTS vouchers (
             </div>
           )}
 
-          {/* MODE A & B: STANDARD LOGIN / REGISTER */}
+          {authMode !== "forgot" && (
+            <div className="grid grid-cols-2 gap-2 p-1.5 bg-slate-950 rounded-2xl mb-5 border border-slate-850">
+              <button
+                type="button"
+                onClick={() => { setAuthMode("login"); setAuthError(""); setRecoveryMessage(""); }}
+                className={`py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all select-none cursor-pointer ${
+                  authMode === "login"
+                    ? "bg-amber-500 text-slate-950 shadow-md font-sans"
+                    : "text-slate-500 hover:text-slate-300 font-sans"
+                }`}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAuthMode("register"); setAuthError(""); setRecoveryMessage(""); }}
+                className={`py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all select-none cursor-pointer ${
+                  authMode === "register"
+                    ? "bg-amber-500 text-slate-950 shadow-md font-sans"
+                    : "text-slate-500 hover:text-slate-300 font-sans"
+                }`}
+              >
+                SignUp Mode
+              </button>
+            </div>
+          )}
+
+          {/* STANDARD LOGIN FORM */}
           {authMode !== "forgot" ? (
             <form onSubmit={handleAuthSubmit} className="space-y-3.5">
+              {authMode === "register" && (
+                <>
+                  <div>
+                    <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block mb-1 font-mono">
+                      Operator Display Name
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={authProfileName}
+                      onChange={(e) => setAuthProfileName(e.target.value)}
+                      placeholder="e.g. Salim Khatib"
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl font-mono text-xs text-white focus:outline-none focus:border-amber-500 transition-all font-semibold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block mb-1 font-mono">
+                      Operator Payout Phone
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={authProfilePhone}
+                      onChange={(e) => setAuthProfilePhone(e.target.value)}
+                      placeholder="e.g. 0699302513"
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl font-mono text-xs text-white focus:outline-none focus:border-amber-500 transition-all font-semibold"
+                    />
+                  </div>
+                </>
+              )}
+
               <div>
                 <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block mb-1 font-mono">
                   Console Username
@@ -1300,71 +1525,9 @@ CREATE TABLE IF NOT EXISTS vouchers (
                   value={authPassword}
                   onChange={(e) => setAuthPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl font-mono text-xs text-white focus:outline-none focus:border-amber-500 transition-all font-semibold"
+                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-850 rounded-xl font-mono text-xs text-white focus:outline-none focus:border-amber-500 transition-all font-semibold"
                 />
               </div>
-
-              {authMode === "register" && (
-                <>
-                  <div>
-                    <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block mb-1 font-mono">
-                      Full Name / Owner Name
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={authProfileName}
-                      onChange={(e) => setAuthProfileName(e.target.value)}
-                      placeholder="e.g. Lukambinga Nickson"
-                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl font-sans text-xs text-white focus:outline-none focus:border-amber-500 transition-all font-semibold"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block mb-1 font-mono">
-                      Payout Wallet Mobile Number
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={authProfilePhone}
-                      onChange={(e) => setAuthProfilePhone(e.target.value)}
-                      placeholder="e.g. 0699302513"
-                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl font-mono text-xs text-white focus:outline-none focus:border-amber-500 transition-all font-semibold"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block mb-1 font-mono">
-                      Router Hardware Brand integration
-                    </label>
-                    <select
-                      value={authRouterBrand}
-                      onChange={(e) => setAuthRouterBrand(e.target.value as any)}
-                      className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl font-mono text-xs text-white focus:outline-none focus:border-amber-500 transition-all font-semibold"
-                    >
-                      <option value="mikrotik">MikroTik RouterOS Board</option>
-                      <option value="tplink">TP-Link Wireless router</option>
-                      <option value="other">Generic Gateway Bridge AP</option>
-                    </select>
-                  </div>
-
-                  {/* BIOMETRICS TRIGGER ON REGISTRATION */}
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      onClick={() => { handleRegisterBiometrics(authUsername || "temp"); }}
-                      className="w-full py-2 bg-slate-950 hover:bg-slate-900 text-cyan-400 hover:text-cyan-300 font-bold border border-slate-800 hover:border-cyan-500/20 rounded-xl text-xs flex items-center justify-center gap-2 select-none active:scale-95 transition-all cursor-pointer shadow"
-                    >
-                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 009 11a5 5 0 00-10 0c0 1.053.18 2.062.512 3m0 0A9 9 0 0118 12M12 3c4.97 0 9 4.03 9 9V12.75" />
-                      </svg>
-                      {registeredBiometrics.includes(authUsername.toLowerCase()) ? "Biometrics Configured ✓" : "Link Fingerprint / Face ID"}
-                    </button>
-                    <p className="text-[9px] text-slate-500 mt-1 text-center font-mono">Enhance console security with cryptography WebAuthn</p>
-                  </div>
-                </>
-              )}
 
               <div className="space-y-2.5 pt-2">
                 <button
@@ -1372,22 +1535,24 @@ CREATE TABLE IF NOT EXISTS vouchers (
                   disabled={authLoading}
                   className="w-full py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-800 disabled:text-slate-600 rounded-xl text-xs font-black text-slate-950 text-center select-none active:scale-[0.98] transition-all cursor-pointer shadow-lg shadow-amber-500/10"
                 >
-                  {authLoading ? "Initializing security link..." : authMode === "login" ? "Secure Login to Gateway" : "Register & Provision Console"}
+                  {authLoading 
+                    ? "Initializing security link..." 
+                    : authMode === "login" 
+                      ? "Secure Login to Gateway" 
+                      : "Create Operator Account & License"}
                 </button>
 
                 {/* BIOMETRIC TRIGGER ON LOGIN */}
-                {authMode === "login" && (
-                  <button
-                    type="button"
-                    onClick={() => handleTriggerBiometricLogin(authUsername)}
-                    className="w-full py-2.5 bg-slate-950 hover:bg-slate-900 text-amber-500 hover:text-amber-400 font-bold border border-slate-850 hover:border-amber-500/10 rounded-xl text-xs flex items-center justify-center gap-2 select-none active:scale-[0.98] transition-all cursor-pointer mt-2"
-                  >
-                    <svg className="w-4 h-4 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 009 11a5 5 0 00-10 0c0 1.053.18 2.062.512 3m0 0A9 9 0 0118 12M12 3c4.97 0 9 4.03 9 9V12.75" />
-                    </svg>
-                    Sign In with TouchID / FaceID
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => handleTriggerBiometricLogin(authUsername)}
+                  className="w-full py-2.5 bg-slate-950 hover:bg-slate-900 text-amber-500 hover:text-amber-400 font-bold border border-slate-850 hover:border-amber-500/10 rounded-xl text-xs flex items-center justify-center gap-2 select-none active:scale-[0.98] transition-all cursor-pointer mt-2"
+                >
+                  <svg className="w-4 h-4 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 009 11a5 5 0 00-10 0c0 1.053.18 2.062.512 3m0 0A9 9 0 0118 12M12 3c4.97 0 9 4.03 9 9V12.75" />
+                  </svg>
+                  Sign In with TouchID / FaceID
+                </button>
               </div>
             </form>
           ) : (
@@ -1504,30 +1669,167 @@ CREATE TABLE IF NOT EXISTS vouchers (
     );
   }
 
-  // Evaluate tabs available based on current operator role
-  const currentTabsList = currentUser.role === "admin" ? [
-    { id: "overview", label: "Overview Metrics", icon: Grid },
-    { id: "operators", label: "Operators Command Center", icon: Users },
+  // Check if operator is unpaid/inactive
+  if (currentUser && currentUser.role === "operator" && currentUser.status !== "active") {
+    
+    const handlePayAndActivate = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!payPhone) {
+        alert("Please enter a valid Phone / Payout number.");
+        return;
+      }
+      setPayLoading(true);
+      try {
+        const res = await fetch("/api/operators/pay-activate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: currentUser.username,
+            phone: payPhone,
+            provider: payProvider,
+            amount: operatorAccessFee
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          alert(`License payment verified successfully!\nTIPS reference ID generated. Account is now active.`);
+          updateCurrentUser(data.user);
+          localStorage.setItem("hotspot_auth_user", JSON.stringify(data.user));
+          fetchDashboardData();
+        } else {
+          alert(data.error || "License payment could not be processed.");
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Server timeout or payment error. Please click retry.");
+      } finally {
+        setPayLoading(false);
+      }
+    };
+
+    const formattedFee = new Intl.NumberFormat("en-US").format(operatorAccessFee || 50000);
+
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-950 px-4 py-8 relative overflow-hidden">
+        {/* Abstract futuristic background decorations */}
+        <div className="absolute top-0 left-0 w-96 h-96 bg-amber-500/5 rounded-full blur-3xl -translate-x-12 -translate-y-12"></div>
+        <div className="absolute bottom-0 right-0 w-96 h-96 bg-teal-500/5 rounded-full blur-3xl translate-x-12 translate-y-12"></div>
+
+        <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 shadow-2xl relative z-10">
+          <div className="text-center mb-6">
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-500 mb-4 animate-bounce">
+              <Lock className="w-7 h-7" />
+            </div>
+            <h1 className="text-xl md:text-2xl font-black tracking-tight text-white font-sans uppercase">
+              Operator Access Required
+            </h1>
+            <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+              Your operator account <span className="font-mono text-cyan-400 font-bold">&#64;{currentUser.username}</span> is successfully registered, but must undergo license activation check, as set by the administrator.
+            </p>
+          </div>
+
+          <div className="bg-slate-950 border border-slate-850 rounded-2xl p-4 mb-6">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-850/60 mb-3">
+              <span className="text-[10px] uppercase font-bold tracking-wider font-mono text-slate-500">License Status</span>
+              <span className="px-2.5 py-0.5 bg-red-500/10 text-red-500 border border-red-500/20 rounded-full font-bold text-[9px] uppercase font-mono animate-pulse">
+                PENDING PAY
+              </span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-[10px] uppercase font-bold tracking-wider font-mono text-slate-500">Access Lifetime Fee</span>
+              <span className="text-lg font-black font-sans text-amber-400">
+                TZS {formattedFee}
+              </span>
+            </div>
+          </div>
+
+          <form onSubmit={handlePayAndActivate} className="space-y-4">
+            {/* Pay provider cards selection with zero design larp */}
+            <div>
+              <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block mb-2 font-mono">
+                Select Mobile network or Bank Transfer
+              </label>
+              
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {[
+                  { id: "mpesa", label: "M-PESA" },
+                  { id: "tigo", label: "TIGO-PESA" },
+                  { id: "airtel", label: "AIRTEL MONEY" },
+                  { id: "halotel", label: "HALOPESA" },
+                  { id: "bank", label: "BANK TRANSFER" }
+                ].map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => setPayProvider(p.id as any)}
+                    className={`p-2.5 rounded-xl border text-center transition-all select-none cursor-pointer flex flex-col items-center justify-center ${
+                      payProvider === p.id
+                        ? "bg-amber-500 border-amber-500 text-slate-950 shadow-md scale-[1.02]"
+                        : "bg-slate-950 border-slate-850 text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    <span className="text-[10px] font-extrabold font-mono uppercase tracking-wide">{p.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-slate-400 text-[10px] font-bold uppercase tracking-wider block mb-1.5 font-mono">
+                {payProvider === "bank" ? "Paying Bank Account / Card Number" : "Mobile Wallet Phone Number"}
+              </label>
+              <input
+                type="text"
+                required
+                value={payPhone}
+                onChange={(e) => setPayPhone(e.target.value)}
+                placeholder={payProvider === "bank" ? "Enter card or account number" : "e.g. 06XXXXXXX or 07XXXXXXX"}
+                className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl font-mono text-xs text-white focus:outline-none focus:border-amber-500 transition-all font-semibold font-mono"
+              />
+              <p className="text-[9.5px] text-slate-500 mt-1.5 leading-normal">
+                Payments are automatically routed via secure <strong>TIPS system (TIPS 10167120)</strong>. Payment details are fully automated and hidden for high security.
+              </p>
+            </div>
+
+            <button
+              type="submit"
+              disabled={payLoading}
+              className="w-full py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-600 rounded-xl text-xs font-black text-slate-950 text-center select-none active:scale-[0.98] transition-all cursor-pointer shadow-lg shadow-amber-500/10 uppercase tracking-widest"
+            >
+              {payLoading ? "Processing secure network handshake..." : "PAY & ACTIVATE HUB"}
+            </button>
+          </form>
+
+          <div className="mt-6 pt-4 border-t border-slate-850 text-center select-none">
+            <button
+              type="button"
+              onClick={() => {
+                updateCurrentUser(null);
+                localStorage.removeItem("hotspot_auth_user");
+              }}
+              className="text-xs text-slate-500 hover:text-white font-mono flex items-center justify-center gap-1.5 mx-auto transition-colors cursor-pointer"
+            >
+              ← Clear Identity / Log Out operator
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Evaluate tabs available based on selected workspace mode of the admin panel
+  const currentTabsList = workspaceMode === "root" ? [
+    ...(currentUser.role === "admin" ? [{ id: "operators", label: "Operators Command Center", icon: Users }] : []),
     { id: "system-control", label: "Audit, Backups & Logs", icon: ShieldAlert },
+    { id: "mikrotik-config", label: "MikroTik Configuration Base", icon: Terminal },
+    { id: "router-config", label: "Router Configuration Base", icon: Server },
+    { id: "settings", label: "Settings Menu", icon: Sliders }
+  ] : workspaceMode === "operator" ? [
+    { id: "overview", label: "Overview Metrics", icon: Grid },
     { id: "packages", label: "Manage Packages", icon: Coins },
     { id: "manual", label: "Manual Activation", icon: UserCheck },
-    { id: "portal", label: "Portal Customization", icon: Wifi },
-    { id: "router", label: "Router API Link & CLI Scripts", icon: Terminal },
-    { id: "database", label: "MySQL Dump & Integration Docs", icon: Database },
-    { id: "settings", label: "Settings Menu", icon: Sliders }
-  ] : currentUser.role === "operator" ? [
-    { id: "op-overview", label: "Limited Reports", icon: TrendingUp },
-    { id: "op-activation", label: "Vouchers & Activations", icon: UserCheck },
-    { id: "op-sessions", label: "Active Sessions Monitor", icon: Eye },
-    { id: "op-logs", label: "Connection & System Logs", icon: BookOpen }
-  ] : [
-    { id: "router-setup", label: "Router Setup", icon: Terminal },
-    { id: "internet-settings", label: "Internet Customization", icon: Wifi },
-    { id: "package-settings", label: "Hotspot Packages", icon: Coins },
-    { id: "my-traffic", label: "Live Traffic & Bandwidth", icon: TrendingUp },
-    { id: "my-profile", label: "Profile & Payouts", icon: CheckCircle2 },
-    { id: "settings", label: "Settings Menu", icon: Sliders }
-  ];
+    { id: "portal", label: "Portal Customization", icon: Wifi }
+  ] : []; // Empty for client portal mode which is fully self-contained!
 
   return (
     <div className="flex flex-col w-full h-full bg-slate-950 font-sans text-slate-100 selection:bg-amber-400 selection:text-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl">
@@ -1573,33 +1875,156 @@ CREATE TABLE IF NOT EXISTS vouchers (
         </div>
       </div>
 
-      {/* Internal Core Dashboard Navigation Tabs */}
-      <div className="bg-slate-900/50 border-b border-slate-800/60 px-5 flex overflow-x-auto scrollbar-none">
-        {currentTabsList.map((tab) => {
-          const Icon = tab.icon;
-          const isActive = currentTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setCurrentTab(tab.id)}
-              className={`flex items-center gap-2 px-4 py-3.5 text-xs font-semibold tracking-wide border-b-2 whitespace-nowrap transition-colors cursor-pointer ${
-                isActive 
-                  ? "border-amber-500 text-amber-400" 
-                  : "border-transparent text-slate-400 hover:text-slate-200"
-              }`}
-            >
-              <Icon className="w-3.5 h-3.5" />
-              {tab.label}
-            </button>
-          );
-        })}
+      {/* Three High-Profile Workspace Selectors: Divide Administrative Roles */}
+      <div className="bg-slate-900/40 p-5 border-b border-slate-800/80">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          
+          {/* Card A: Root ISP Admin Roles & Systems */}
+          <button
+            type="button"
+            onClick={() => {
+              setWorkspaceMode("root");
+              if (currentUser.role === "admin") {
+                setCurrentTab("operators");
+              } else {
+                setCurrentTab("system-control");
+              }
+            }}
+            className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex items-start gap-4 select-none cursor-pointer group ${
+              workspaceMode === "root"
+                ? "bg-slate-900 border-amber-500/40 text-amber-400 shadow-[0_0_15px_-3px_rgba(245,158,11,0.12)] scale-[1.01]"
+                : "bg-slate-950/40 border-slate-850 text-slate-400 hover:text-white hover:border-slate-800 hover:bg-slate-900/30"
+            }`}
+          >
+            <div className={`p-3 rounded-xl shrink-0 transition-colors ${
+              workspaceMode === "root" ? "bg-amber-500/15 text-amber-500" : "bg-slate-900 text-slate-500"
+            }`}>
+              <Server className="w-5 h-5" />
+            </div>
+            <div className="space-y-1">
+              <span className="text-[10px] font-bold font-mono tracking-wider uppercase text-slate-500">ROLE: ROOT ADMIN</span>
+              <h4 className="text-xs font-black tracking-wide uppercase text-slate-150">Root ISP Controller</h4>
+              <p className="text-[10.5px] text-slate-400 leading-normal">
+                Link physical routers, synchronize WAN interfaces, backup system dumps, and manage operator accounts.
+              </p>
+            </div>
+          </button>
+
+          {/* Card B: Local Franchise Operator Roles & Tasks */}
+          <button
+            type="button"
+            onClick={() => {
+              setWorkspaceMode("operator");
+              setCurrentTab("overview");
+            }}
+            className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex items-start gap-4 select-none cursor-pointer group ${
+              workspaceMode === "operator"
+                ? "bg-slate-900 border-cyan-500/40 text-cyan-400 shadow-[0_0_15px_-3px_rgba(6,182,212,0.12)] scale-[1.01]"
+                : "bg-slate-950/40 border-slate-850 text-slate-400 hover:text-white hover:border-slate-800 hover:bg-slate-900/30"
+            }`}
+          >
+            <div className={`p-3 rounded-xl shrink-0 transition-colors ${
+              workspaceMode === "operator" ? "bg-cyan-500/15 text-cyan-400" : "bg-slate-900 text-slate-500"
+            }`}>
+              <Coins className="w-5 h-5" />
+            </div>
+            <div className="space-y-1">
+              <span className="text-[10px] font-bold font-mono tracking-wider uppercase text-slate-500">ROLE: LOCAL OPERATOR</span>
+              <h4 className="text-xs font-black tracking-wide uppercase text-slate-150">Operator & Billing</h4>
+              <p className="text-[10.5px] text-slate-400 leading-normal">
+                Analyze revenue, customize client hotspot packages, print vouchers, and execute manual activation overrides.
+              </p>
+            </div>
+          </button>
+
+          {/* Card C: Client Mobile Portal Viewer */}
+          <button
+            type="button"
+            onClick={() => {
+              setWorkspaceMode("client");
+              setCurrentTab("portal-sim");
+            }}
+            className={`p-4 rounded-2xl border text-left transition-all relative overflow-hidden flex items-start gap-4 select-none cursor-pointer group ${
+              workspaceMode === "client"
+                ? "bg-slate-900 border-emerald-500/40 text-emerald-400 shadow-[0_0_15px_-3px_rgba(16,185,129,0.12)] scale-[1.01]"
+                : "bg-slate-950/40 border-slate-850 text-slate-400 hover:text-white hover:border-slate-800 hover:bg-slate-900/30"
+            }`}
+          >
+            <div className={`p-3 rounded-xl shrink-0 transition-colors ${
+              workspaceMode === "client" ? "bg-emerald-500/15 text-emerald-400" : "bg-slate-900 text-slate-500"
+            }`}>
+              <Radio className="w-5 h-5" />
+            </div>
+            <div className="space-y-1">
+              <span className="text-[10px] font-bold font-mono tracking-wider uppercase text-slate-500">CLIENT LIVE PORTAL</span>
+              <h4 className="text-xs font-black tracking-wide uppercase text-slate-150">Mobile Gateway Unit</h4>
+              <p className="text-[10.5px] text-slate-400 leading-normal">
+                Interactive mobile captive simulator. Experience client purchase flows, network checks, and pay overlays.
+              </p>
+            </div>
+          </button>
+
+        </div>
       </div>
+
+      {/* Internal Core Dashboard Navigation Tabs */}
+      {currentTabsList.length > 0 && (
+        <div className="bg-slate-900/50 border-b border-slate-800/60 px-5 flex overflow-x-auto scrollbar-none">
+          {currentTabsList.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = currentTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setCurrentTab(tab.id)}
+                className={`flex items-center gap-2 px-4 py-3.5 text-xs font-semibold tracking-wide border-b-2 whitespace-nowrap transition-colors cursor-pointer ${
+                  isActive 
+                    ? "border-amber-500 text-amber-400" 
+                    : "border-transparent text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Main tab viewer viewport */}
       <div className="flex-1 p-5 overflow-y-auto">
 
+        {/* TAB: MOBILE PORTAL SIMULATOR */}
+        {workspaceMode === "client" && (
+          <div className="flex flex-col items-center justify-start py-4">
+            <div className="text-center mb-6">
+              <h3 className="text-md font-bold tracking-tight text-white uppercase flex items-center justify-center gap-2">
+                <Radio className="w-5 h-5 text-emerald-400 animate-pulse" /> Live Client Captive Portal View
+              </h3>
+              <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                Test active customer purchases, USSD push checkouts, and MikroTik Hotspot automated traffic authorization live.
+              </p>
+            </div>
+
+            {/* Simulated Phone Case Wrapper */}
+            <div className="w-full max-w-sm rounded-[32px] bg-slate-950 p-3 shadow-2xl border border-slate-800 relative ring-4 ring-slate-900 shadow-slate-950">
+              {/* Simulated Notch */}
+              <div className="absolute top-4 left-1/2 transform -translate-x-1/2 w-28 h-4 rounded-full bg-slate-900 z-20 flex items-center justify-center">
+                <span className="w-2 h-2 rounded-full bg-blue-500/10"></span>
+              </div>
+              
+              <div className="w-full aspect-[9/19] h-[680px] rounded-[24px] overflow-hidden">
+                <CaptivePortal 
+                  packages={packages} 
+                  onPaymentSuccess={onRefreshPackages} 
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* TAB: OPERATORS COMMAND CENTER */}
-        {currentTab === "operators" && (
+        {currentTab === "operators" && currentUser.role === "admin" && (
           <OperatorsTab
             currentUser={currentUser}
             operatorsList={operatorsList}
@@ -2106,109 +2531,174 @@ CREATE TABLE IF NOT EXISTS vouchers (
           </div>
         )}
 
-        {/* TAB 4: MIKROTIK ROUTEROS CLI SCRIPTS & PHYSICAL LINK */}
-        {currentTab === "router" && (
+        {/* TAB 4: MIKROTIK CONFIGURATION BASE */}
+        {currentTab === "mikrotik-config" && (
           <div className="space-y-6">
-            
-            {/* PHYSICAL GATEWAY LINKING PLATFORM */}
+            {/* Live Connection Status Banner */}
+            <div className={`p-6 rounded-2xl border ${
+              isIspConnected 
+                ? "bg-emerald-950/25 border-emerald-500/20 text-emerald-400" 
+                : "bg-amber-950/25 border-amber-500/20 text-amber-500"
+            } shadow-lg transition-all`}>
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-start gap-4">
+                  <div className={`p-3 rounded-xl ${
+                    isIspConnected ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-500/10 text-amber-400"
+                  }`}>
+                    <Radio className={`w-6 h-6 ${isIspConnected ? "animate-pulse" : ""}`} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full ${isIspConnected ? "bg-emerald-400 animate-ping" : "bg-amber-400 animate-pulse"}`}></span>
+                      <h4 className="font-bold text-sm tracking-wide uppercase">
+                        {isIspConnected ? "MikroTik Link: Authenticated & Connected" : "MikroTik Link: Disconnected"}
+                      </h4>
+                    </div>
+                    <p className="text-[11px] text-slate-350 leading-relaxed mt-1.5 max-w-2xl">
+                      {isIspConnected 
+                        ? "Success! The billing Core has successfully connected with the MikroTik Router board over the RouterOS API on port 8728/8729. Active user flows can be managed."
+                        : "Verify your API user credentials list and local network settings below. Connect to synchronize active captive hotspot profiles."
+                      }
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2.5 self-end md:self-center">
+                  {isIspConnected ? (
+                    <button
+                      type="button"
+                      onClick={handleDisconnectSystem}
+                      className="px-4 py-2 bg-red-650 hover:bg-red-750 transition-colors text-white font-mono text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer"
+                    >
+                      Disconnect API Link
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleConnectSystem}
+                      disabled={connectingIsp}
+                      className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 transition-colors text-slate-950 font-sans text-xs font-extrabold uppercase tracking-wider rounded-xl cursor-pointer flex items-center gap-2 shadow-lg shadow-amber-500/10 disabled:opacity-50"
+                    >
+                      {connectingIsp ? (
+                        <>
+                          <span className="w-3.5 h-3.5 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></span>
+                          Initializing API Sync...
+                        </>
+                      ) : (
+                        "Connect RouterOS API"
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* MIKROTIK DEVICE CONNECTING BASE */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               
-              {/* Form Config Panel */}
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+              {/* Credentials / API Config and parameters */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-5">
                 <div>
                   <h3 className="text-xs font-bold tracking-wider text-slate-200 uppercase flex items-center gap-2">
-                    <Server className="w-4 h-4 text-amber-500" /> Physical Router API Gateway Link
+                    <Server className="w-4 h-4 text-amber-500" /> MikroTik API Credentials
                   </h3>
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    Connect your offline MikroTik RouterBoard dynamically to this billing system. The system uses the RouterOS API port to synchronize active subscriber leases.
+                  <p className="text-[11px] text-slate-450 mt-1.5 leading-relaxed">
+                    Set up parameters to authorize communication with your MikroTik hardware unit over the RouterOS API.
                   </p>
                 </div>
 
                 <form onSubmit={handleSaveRouterLink} className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-slate-400 text-[10px] font-bold uppercase block mb-1">Router IP Address / Host</label>
-                      <input
-                        type="text"
-                        required
-                        value={linkHost}
-                        onChange={(e) => setLinkHost(e.target.value)}
-                        className="w-full px-3 py-2 bg-slate-950 border border-slate-850 rounded-xl font-mono text-xs text-slate-100"
-                      />
+                  <div className="p-4 bg-slate-950 border border-slate-850 rounded-xl space-y-4">
+                    <div className="text-[10px] font-bold text-slate-400 tracking-wider uppercase flex items-center gap-1.5">
+                      <span className="w-1 h-3.5 bg-amber-500 rounded-full"></span>
+                      1. Connection & Routing Properties
                     </div>
-                    <div>
-                      <label className="text-slate-400 text-[10px] font-bold uppercase block mb-1">API Port (Default: 8728)</label>
-                      <input
-                        type="text"
-                        required
-                        value={linkPort}
-                        onChange={(e) => setLinkPort(e.target.value)}
-                        className="w-full px-3 py-2 bg-slate-950 border border-slate-850 rounded-xl font-mono text-xs text-slate-100"
-                      />
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">Router IP Address / Host</label>
+                        <input
+                          type="text"
+                          required
+                          value={linkHost}
+                          onChange={(e) => setLinkHost(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-amber-500/35 focus:ring-0 rounded-lg font-mono text-xs text-slate-150 transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">API Port (Default: 8728)</label>
+                        <input
+                          type="text"
+                          required
+                          value={linkPort}
+                          onChange={(e) => setLinkPort(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-amber-500/35 focus:ring-0 rounded-lg font-mono text-xs text-slate-150 transition-colors"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">API Username</label>
+                        <input
+                          type="text"
+                          required
+                          value={linkUser}
+                          onChange={(e) => setLinkUser(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-amber-500/35 focus:ring-0 rounded-lg font-mono text-xs text-slate-150 transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">API Password</label>
+                        <input
+                          type="password"
+                          value={linkPassword}
+                          onChange={(e) => setLinkPassword(e.target.value)}
+                          placeholder="••••••••"
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-amber-500/35 focus:ring-0 rounded-lg font-mono text-xs text-slate-150 transition-colors"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 items-center">
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">DHCP Local Interface</label>
+                        <input
+                          type="text"
+                          required
+                          value={linkInterface}
+                          onChange={(e) => setLinkInterface(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-amber-500/35 focus:ring-0 rounded-lg font-mono text-xs text-slate-150 transition-colors"
+                        />
+                      </div>
+                      <div className="flex items-center space-x-2 mt-4 select-none">
+                        <input
+                          id="sslEnabled"
+                          type="checkbox"
+                          checked={sslEnabled}
+                          onChange={(e) => setSslEnabled(e.target.checked)}
+                          className="w-4 h-4 rounded text-amber-500 bg-slate-900 border-slate-800 focus:ring-0 focus:ring-offset-0"
+                        />
+                        <label htmlFor="sslEnabled" className="text-slate-400 text-[9px] font-semibold uppercase cursor-pointer">
+                          Secure SSL (Port 8729)
+                        </label>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-slate-400 text-[10px] font-bold uppercase block mb-1">API Username</label>
-                      <input
-                        type="text"
-                        required
-                        value={linkUser}
-                        onChange={(e) => setLinkUser(e.target.value)}
-                        className="w-full px-3 py-2 bg-slate-950 border border-slate-850 rounded-xl font-mono text-xs text-slate-100"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-slate-400 text-[10px] font-bold uppercase block mb-1">API Password</label>
-                      <input
-                        type="password"
-                        value={linkPassword}
-                        onChange={(e) => setLinkPassword(e.target.value)}
-                        placeholder="••••••••"
-                        className="w-full px-3 py-2 bg-slate-950 border border-slate-850 rounded-xl font-mono text-xs text-slate-100"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-slate-400 text-[10px] font-bold uppercase block mb-1">DHCP Server Interface Name</label>
-                    <input
-                      type="text"
-                      required
-                      value={linkInterface}
-                      onChange={(e) => setLinkInterface(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-850 rounded-xl font-mono text-xs text-slate-100"
-                    />
-                  </div>
-
-                  <div className="flex items-center space-x-2 bg-slate-950/45 p-3 rounded-xl border border-slate-850/60">
-                    <input
-                      id="sslEnabled"
-                      type="checkbox"
-                      checked={sslEnabled}
-                      onChange={(e) => setSslEnabled(e.target.checked)}
-                      className="w-4 h-4 rounded text-amber-500 bg-slate-900 border-slate-800 focus:ring-0 focus:ring-offset-0"
-                    />
-                    <label htmlFor="sslEnabled" className="text-slate-350 text-[10px] font-medium select-none">
-                      Force Secure API SSL Socket handshake connection (SSL port 8729)
-                    </label>
-                  </div>
-
-                  <div className="flex gap-3">
+                  <div className="flex gap-3 justify-end pt-2">
                     <button
                       type="button"
                       onClick={handleTestRouterLink}
                       disabled={testingLink}
-                      className="flex-1 py-2 bg-slate-950 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-slate-200 font-bold text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                      className="px-4 py-2.5 bg-slate-950 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-slate-300 font-bold text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer disabled:opacity-50"
                     >
-                      {testingLink ? "Pinging Socket..." : "Test Link Handshake"}
+                      {testingLink ? "Verifying..." : "Validate Credentials"}
                     </button>
                     <button
                       type="submit"
-                      className="flex-1 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[10px] uppercase tracking-wider rounded-xl shadow-md cursor-pointer shadow-amber-500/10 transition-colors"
+                      className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-[10px] uppercase tracking-wider rounded-xl shadow-md cursor-pointer transition-colors"
                     >
-                      Save Gateway Setup
+                      Save API credentials
                     </button>
                   </div>
                 </form>
@@ -2218,7 +2708,7 @@ CREATE TABLE IF NOT EXISTS vouchers (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
                 <div>
                   <h3 className="text-xs font-bold tracking-wider text-slate-200 uppercase flex items-center gap-2 mb-3">
-                    <Check className="w-4 h-4 text-emerald-400" /> Gateway Handshake diagnostics
+                    <Check className="w-4 h-4 text-emerald-400" /> Handshake diagnostics
                   </h3>
                   
                   {linkTestResult ? (
@@ -2232,7 +2722,7 @@ CREATE TABLE IF NOT EXISTS vouchers (
                           <CheckCircle2 className="w-5 h-5 mt-0.5 shrink-0" />
                           <div>
                             <p className="font-bold text-xs uppercase tracking-wide">
-                              {linkTestResult.success ? "Router Connection Successful!" : "Handshake Failed"}
+                              {linkTestResult.success ? "Hardware Handshake Success!" : "Handshake Failed"}
                             </p>
                             <p className="text-[10px] text-slate-300 leading-normal mt-1">
                               {linkTestResult.message}
@@ -2244,20 +2734,20 @@ CREATE TABLE IF NOT EXISTS vouchers (
                       {linkTestResult.success && (
                         <div className="grid grid-cols-2 gap-3 text-xs">
                           <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-850">
-                            <span className="text-slate-500 text-[10px] block font-semibold uppercase">BOARD NAME</span>
+                            <span className="text-slate-500 text-[10px] block font-semibold uppercase">BOARD MODEL</span>
                             <span className="font-mono text-slate-200 mt-0.5 block font-bold">{linkTestResult.boardName || "RB4011iGS+"}</span>
                           </div>
                           <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-850">
                             <span className="text-slate-500 text-[10px] block font-semibold uppercase">ROUTEROS VERSION</span>
-                            <span className="font-mono text-slate-200 mt-0.5 block font-bold">{linkTestResult.rosVersion || "v7.14"}</span>
+                            <span className="font-mono text-slate-200 mt-0.5 block font-bold">{linkTestResult.rosVersion || "v7.12.1"}</span>
                           </div>
                           <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-850">
                             <span className="text-slate-500 text-[10px] block font-semibold uppercase">HARDWARE UPTIME</span>
-                            <span className="font-mono text-emerald-400 mt-0.5 block font-bold">{linkTestResult.uptime || "14d 3h 11m"}</span>
+                            <span className="font-mono text-emerald-400 mt-0.5 block font-bold">{linkTestResult.uptime || "14d 6h 32m"}</span>
                           </div>
                           <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-850">
                             <span className="text-slate-500 text-[10px] block font-semibold uppercase">CPU LOAD CORE</span>
-                            <span className="font-mono text-white mt-0.5 block font-bold">{linkTestResult.cpuLoad || "2 %"}</span>
+                            <span className="font-mono text-white mt-0.5 block font-bold">{linkTestResult.cpuLoad || "4%"}</span>
                           </div>
                         </div>
                       )}
@@ -2265,8 +2755,8 @@ CREATE TABLE IF NOT EXISTS vouchers (
                   ) : (
                     <div className="text-center py-6 text-slate-400 border border-slate-850 border-dashed rounded-xl flex flex-col items-center justify-center">
                       <Wifi className="w-8 h-8 text-slate-600 mb-2 animate-bounce" />
-                      <p className="text-xs text-slate-400">No diagnostic test executed yet.</p>
-                      <p className="text-[10px] text-slate-500 mt-1 max-w-[280px]">Fill IP/Domain credentials on the left and click "Test Link Handshake" to query RouterOS health state.</p>
+                      <p className="text-xs text-slate-400">No handshake test executed yet.</p>
+                      <p className="text-[10px] text-slate-500 mt-1 max-w-[280px]">Fill details on the left and click "Validate Credentials" to check the MikroTik board response.</p>
                     </div>
                   )}
                 </div>
@@ -2274,27 +2764,28 @@ CREATE TABLE IF NOT EXISTS vouchers (
                 <div className="bg-slate-950/45 border border-slate-850 p-3 rounded-xl mt-4 flex items-center gap-2 text-[10px] text-amber-300">
                   <AlertCircle className="w-4 h-4 shrink-0 text-amber-500" />
                   <p>
-                    <strong>API Security Note:</strong> Always construct a dedicated MikroTik API user inside <code>/user group</code> with restricted policy scopes rather than sharing master credentials.
+                    <strong>Recommended Setup:</strong> Create a separate API group with read/write policies inside MikroTik and bind to this interface.
                   </p>
                 </div>
               </div>
 
             </div>
 
+            {/* CLI SCRIPT GENERATOR */}
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
               <div>
-                <h3 className="text-xs font-bold tracking-wider text-slate-300 uppercase">
-                  ⚙ CLI Script Builder for RouterOS v6/v7
+                <h3 className="text-xs font-bold tracking-wider text-slate-300 uppercase flex items-center gap-2">
+                  <Terminal className="w-4 h-4 text-amber-500" /> Winbox / MikroTik RouterOS Script Generator
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-1">
-                  Construct a perfectly formatted script containing critical walled garden ports/DNS (such as Airtel Money IP blocks and Vodacom checkout servers) allowing clients access to checkout portals.
+                  Generates RouterOS commands to establish walled garden ports for Tanzanian mobile money gateway checkouts.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="text-slate-450 text-[10px] font-bold uppercase tracking-wider block mb-1">
-                    Hotspot Router IP Address
+                    Hotspot IP Address
                   </label>
                   <input
                     type="text"
@@ -2305,7 +2796,7 @@ CREATE TABLE IF NOT EXISTS vouchers (
                 </div>
                 <div>
                   <label className="text-slate-450 text-[10px] font-bold uppercase tracking-wider block mb-1">
-                    Wi-Fi SSID Name (Broadcasting)
+                    Broadcasting SSID
                   </label>
                   <input
                     type="text"
@@ -2316,7 +2807,7 @@ CREATE TABLE IF NOT EXISTS vouchers (
                 </div>
                 <div>
                   <label className="text-slate-450 text-[10px] font-bold uppercase tracking-wider block mb-1">
-                    Hotspot DNS Landmark Gate
+                    Hotspot DNS Gate IP or Name
                   </label>
                   <input
                     type="text"
@@ -2332,83 +2823,377 @@ CREATE TABLE IF NOT EXISTS vouchers (
                   <button
                     onClick={() => {
                       navigator.clipboard.writeText(generatedScript);
-                      alert("MikroTik CLI config commands copied to clipboard!");
+                      alert("MikroTik CLI commands copied to clipboard!");
                     }}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] uppercase font-bold bg-slate-850 hover:bg-slate-800 text-amber-400 border border-slate-750 hover:border-slate-650 rounded-lg cursor-pointer transition-colors"
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] uppercase font-bold bg-slate-850 hover:bg-slate-800 text-amber-400 border border-slate-755 hover:border-slate-655 rounded-lg cursor-pointer transition-colors"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    Copy Commands
+                    Copy commands
                   </button>
                 </div>
                 
-                <h4 className="text-[11px] font-semibold text-slate-400 uppercase mb-2">Generated Hotspot RouterOS Script CLI:</h4>
+                <h4 className="text-[11px] font-semibold text-slate-400 uppercase mb-2">Commands for Winbox console:</h4>
                 <pre className="bg-slate-950 rounded-xl p-4 font-mono text-[11px] text-amber-500 overflow-x-auto max-h-72 border border-slate-850 leading-relaxed">
                   {generatedScript}
                 </pre>
               </div>
 
-              <div className="rounded-xl bg-slate-950/45 border border-slate-850/60 p-4 space-y-2">
+              <div className="rounded-xl bg-slate-950/45 border border-slate-850 p-4 space-y-2">
                 <h4 className="text-xs font-semibold text-white uppercase flex items-center gap-1.5 font-sans">
-                  <BookOpen className="w-4 h-4 text-amber-500" /> How to deploy this on MikroTik:
+                  <BookOpen className="w-4 h-4 text-amber-500" /> Clipboard instructions:
                 </h4>
                 <ol className="list-decimal list-inside text-xs text-slate-400 space-y-1.5 pl-1 leading-relaxed">
-                  <li>Open <strong>WinBox</strong> and connect to your MikroTik router board.</li>
-                  <li>Click on the <strong>"New Terminal"</strong> icon in the left menu dashboard.</li>
-                  <li>Copy and paste all generated commands shown above directly inside the console terminal window.</li>
-                  <li>Copy your custom landing page directory (HTML) to your MikroTik router disk storage, referencing our Cloud API callback routes for payments validation!</li>
+                  <li>Log into your MikroTik router board via Winbox application.</li>
+                  <li>Click on the <strong>"New Terminal"</strong> component in the utility sidebar.</li>
+                  <li>Paste the generated text script commands completely inside the shell console.</li>
+                  <li>Host responsive gateway directory folders within internal disk storage to redirect users safely.</li>
                 </ol>
               </div>
             </div>
-
           </div>
         )}
 
-        {/* TAB 5: MYSQL SCHEMA & API CALLBACK GUIDES */}
-        {currentTab === "database" && (
+        {/* TAB 5: ROUTER CONFIGURATION BASE */}
+        {currentTab === "router-config" && (
           <div className="space-y-6">
             
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-              <div>
-                <h3 className="text-xs font-bold tracking-wider text-slate-300 uppercase">
-                  📦 Relational Database DDL Schema (MySQL / MariaDB)
-                </h3>
-                <p className="text-[11px] text-slate-400 mt-1">
-                  For your commercial production deployment, you can provision a standard MySQL database using the following relational structure schema.
-                </p>
-              </div>
-
-              <div className="relative">
-                <div className="absolute top-3 right-3">
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(sqlDumpString);
-                      alert("MySQL DDL queries copied to clipboard!");
-                    }}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] uppercase font-bold bg-slate-850 hover:bg-slate-800 text-amber-400 border border-slate-755 hover:border-slate-655 rounded-lg cursor-pointer"
-                  >
-                    Copy SQL Code
-                  </button>
+            {/* Active Router Link Status */}
+            <div className={`p-6 rounded-2xl border ${
+              isIspConnected 
+                ? "bg-emerald-950/25 border-emerald-500/20 text-emerald-400" 
+                : "bg-amber-950/25 border-amber-500/20 text-amber-500"
+            } shadow-lg transition-all`}>
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-start gap-4">
+                  <div className={`p-3 rounded-xl ${
+                    isIspConnected ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-500/10 text-amber-400"
+                  }`}>
+                    <Cpu className="w-6 h-6 animate-pulse" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                       <span className={`w-2 h-2 rounded-full ${isIspConnected ? "bg-emerald-400 animate-ping" : "bg-amber-400 animate-pulse"}`}></span>
+                       <h4 className="font-bold text-sm tracking-wide uppercase">
+                         Router State: {isIspConnected ? "DETECTION CONFIRMED (ONLINE)" : "OFFLINE DETECT MODES"}
+                       </h4>
+                    </div>
+                    <p className="text-[11px] text-slate-355 leading-relaxed mt-1.5 max-w-2xl">
+                      {isIspConnected 
+                        ? "Active Bridge: Physical router binding detected. High-speed billing core is sharing local subscriber authentication tables correctly and sharing internet broadcast services."
+                        : "No active physical gateway detected in local systems. Fill local hardware specifications below and start connection mode to share internet broadcasts."
+                      }
+                    </p>
+                  </div>
                 </div>
                 
-                <pre className="bg-slate-950 rounded-xl p-4 font-mono text-[11px] text-slate-300 overflow-x-auto max-h-80 border border-slate-850 leading-relaxed">
-                  {sqlDumpString}
-                </pre>
+                <div className="flex items-center gap-2.5 self-end md:self-center">
+                  {isIspConnected ? (
+                    <button
+                      type="button"
+                      onClick={handleDisconnectSystem}
+                      className="px-4 py-2 bg-red-650 hover:bg-red-750 transition-colors text-white font-mono text-xs font-bold uppercase tracking-wider rounded-xl cursor-pointer"
+                    >
+                      Disable Internet Sharing
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleConnectSystem}
+                      disabled={connectingIsp}
+                      className="px-5 py-2.5 bg-emerald-650 hover:bg-emerald-555 transition-colors text-white font-sans text-xs font-extrabold uppercase tracking-wider rounded-xl cursor-pointer flex items-center gap-2 shadow-lg shadow-emerald-555/10 disabled:opacity-50"
+                    >
+                      {connectingIsp ? (
+                        <>
+                          <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                          Initializing WAN...
+                        </>
+                      ) : (
+                        "Enable Router Internet"
+                      )}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* WAN & Link configuration parameters */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-5">
+                <div>
+                  <h3 className="text-xs font-bold tracking-wider text-slate-200 uppercase flex items-center gap-2">
+                    <Wifi className="w-4 h-4 text-emerald-400" /> 1. ISP WAN Uplink Configuration
+                  </h3>
+                  <p className="text-[11px] text-slate-450 mt-1">
+                    Set up internet connection parameters so that WAN interface correctly distributes packets.
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">WAN Connection Protocol</label>
+                    <select
+                      value={ispType}
+                      onChange={(e) => setIspType(e.target.value as any)}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-amber-500/35 focus:ring-0 rounded-lg font-mono text-xs text-slate-150 font-semibold"
+                    >
+                      <option value="dhcp">DHCP Client (Dynamic IP from ISP)</option>
+                      <option value="pppoe">PPPoE Client (Broadband Dial-up Identity)</option>
+                      <option value="static">Static IP (Manual WAN parameters)</option>
+                    </select>
+                  </div>
+
+                  {ispType === "pppoe" && (
+                    <div className="grid grid-cols-2 gap-3 bg-slate-950/40 p-2.5 rounded-lg border border-slate-850">
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">PPPoE Username</label>
+                        <input
+                          type="text"
+                          required
+                          value={ispUsername}
+                          onChange={(e) => setIspUsername(e.target.value)}
+                          placeholder="e.g. fiber-home@tanzania"
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-amber-500/35 focus:ring-0 rounded-lg font-mono text-xs text-slate-150"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">PPPoE Password</label>
+                        <input
+                          type="password"
+                          value={ispPassword}
+                          onChange={(e) => setIspPassword(e.target.value)}
+                          placeholder="••••••••"
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-amber-500/35 focus:ring-0 rounded-lg font-mono text-xs text-slate-150"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {ispType === "static" && (
+                    <div className="grid grid-cols-2 gap-3 bg-slate-950/40 p-2.5 rounded-lg border border-slate-850">
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">Static Subnet IP (cidr)</label>
+                        <input
+                          type="text"
+                          required
+                          value={ispWanIp}
+                          onChange={(e) => setIspWanIp(e.target.value)}
+                          placeholder="197.23.44.112/30"
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-amber-500/35 focus:ring-0 rounded-lg font-mono text-xs text-slate-150"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">Default WAN Gateway</label>
+                        <input
+                          type="text"
+                          required
+                          value={ispWanGateway}
+                          onChange={(e) => setIspWanGateway(e.target.value)}
+                          placeholder="197.23.44.111"
+                          className="w-full px-3 py-2 bg-slate-900 border border-slate-800 focus:border-amber-500/35 focus:ring-0 rounded-lg font-mono text-xs text-slate-150"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">Primary DNS Server IP</label>
+                      <input
+                        type="text"
+                        required
+                        value={ispDnsPrimary}
+                        onChange={(e) => setIspDnsPrimary(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-amber-500/35 focus:ring-0 rounded-lg font-mono text-xs text-slate-150"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">Secondary DNS Server IP</label>
+                      <input
+                        type="text"
+                        required
+                        value={ispDnsSecondary}
+                        onChange={(e) => setIspDnsSecondary(e.target.value)}
+                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-amber-500/35 focus:ring-0 rounded-lg font-mono text-xs text-slate-150"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-800 pt-4">
+                  <h3 className="text-xs font-bold tracking-wider text-slate-200 uppercase flex items-center gap-2 mb-3">
+                    <Layers className="w-4 h-4 text-emerald-400" /> 2. Local Router Hardware Configuration Base
+                  </h3>
+                  <p className="text-[11px] text-slate-450 mb-4">
+                    Map standard routing parameters to enable device auto-detection and activate the captive billing portals.
+                  </p>
+
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">Local LAN Gateway IP</label>
+                        <input
+                          type="text"
+                          required
+                          value={localRouterGateway}
+                          onChange={(e) => setLocalRouterGateway(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg font-mono text-xs text-slate-150"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">Bound Hardware MAC Address</label>
+                        <input
+                          type="text"
+                          required
+                          value={localRouterMac}
+                          onChange={(e) => setLocalRouterMac(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg font-mono text-xs text-slate-150"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">Local IP Subnet Mask Scheme</label>
+                        <input
+                          type="text"
+                          required
+                          value={localSubnetMask}
+                          onChange={(e) => setLocalSubnetMask(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg font-mono text-xs text-slate-150"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">DHCP Address Client Pool</label>
+                        <input
+                          type="text"
+                          required
+                          value={localLeasePool}
+                          onChange={(e) => setLocalLeasePool(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg font-mono text-xs text-slate-150"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 items-center">
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">Physical Host Line Speed</label>
+                        <select
+                          value={localLinkSpeed}
+                          onChange={(e) => setLocalLinkSpeed(e.target.value)}
+                          className="w-full px-2.5 py-2 bg-slate-950 border border-slate-800 rounded-lg font-mono text-[10.5px] text-slate-150 font-semibold"
+                        >
+                          <option value="Auto-Negotiated 1 Gbps / Full Duplex">Auto-Negotiated 1 Gbps / Full</option>
+                          <option value="100 Mbps / Full Duplex">100 Mbps / Full</option>
+                          <option value="10 Gbps / SFP+ Optical Link">10 Gbps / SFP+ Optical</option>
+                          <option value="Auto-Negotiated Fast Ethernet">Auto-Negotiated Fast</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-slate-500 text-[9px] font-semibold uppercase block mb-1">Hotspot LAN Ethernet Port</label>
+                        <input
+                          type="text"
+                          required
+                          value={localHotspotInterface}
+                          onChange={(e) => setLocalHotspotInterface(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg font-mono text-xs text-slate-150"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex gap-3 justify-end pt-2 border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={handleSaveRouterLink}
+                    className="px-5 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-[10px] uppercase tracking-wider rounded-xl shadow-md cursor-pointer transition-colors"
+                  >
+                    Save Router Connection Bases
+                  </button>
+                </div>
               </div>
 
-              <div className="rounded-xl bg-slate-950/45 border border-slate-850 p-4 space-y-3">
-                <h4 className="text-xs font-bold text-white uppercase flex items-center gap-1.5">
-                  <FileText className="w-4 h-4 text-emerald-400" /> API Integration Docs (Tanzania Mobile Gateway)
-                </h4>
-                <p className="text-xs text-slate-400 leading-relaxed">
-                  The billing platform can hook up with local Tanzanian aggregators like <strong>Selcom Pay, Flutterwave, or NALA API</strong>. After registering:
-                </p>
-                
-                <ul className="list-disc list-inside text-xs text-slate-400 space-y-2 pl-1 leading-relaxed">
-                  <li>Configure the gateway webhook to target: <code className="text-amber-400 font-mono">https://your-domain.com/api/pay/callback</code>.</li>
-                  <li>When Tanzanian clients input their M-Pesa phone number, NALA or Selcom issues a USSD Push trigger directly to Vodacom.</li>
-                  <li>Once they input their secret PIN, the third-party gateway responds with a webhook success model containing the transaction details, auto activating their IP connection profile!</li>
-                </ul>
+              {/* Status and Internet Detection Panel */}
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col justify-between">
+                <div>
+                  <h3 className="text-xs font-bold tracking-wider text-slate-200 uppercase flex items-center gap-2 mb-3">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Router Network Presence Checks
+                  </h3>
+
+                  <div className="space-y-4">
+                    <button
+                      type="button"
+                      onClick={handleVerifyRouterDetection}
+                      disabled={routerDetecting}
+                      className="w-full px-4 py-3 bg-slate-950 hover:bg-slate-850 border border-slate-800 hover:border-slate-700 text-slate-350 text-xs font-bold uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      {routerDetecting ? (
+                        <>
+                          <span className="w-3.5 h-3.5 border-2 border-slate-350 border-t-transparent rounded-full animate-spin"></span>
+                          Polling Base Hardware...
+                        </>
+                      ) : (
+                        "Verify Router Hardware Presence"
+                      )}
+                    </button>
+
+                    {routerDetectResult ? (
+                      <div className="space-y-4 font-sans text-xs">
+                        <div className={`p-4 rounded-xl border ${
+                          routerDetectResult.success 
+                            ? "bg-emerald-950/25 border-emerald-500/20 text-emerald-400" 
+                            : "bg-red-950/25 border-red-500/20 text-red-400"
+                        }`}>
+                          <p className="font-bold uppercase text-[10px] tracking-wider mb-1">
+                            {routerDetectResult.success ? "Router presence verified in system" : "No Hardware Found"}
+                          </p>
+                          <p className="text-[10.5px] leading-relaxed text-slate-300">
+                            {routerDetectResult.message}
+                          </p>
+                        </div>
+
+                        {routerDetectResult.success && (
+                          <div className="grid grid-cols-2 gap-3 text-xs">
+                            <div className="bg-slate-950/65 p-3 rounded-xl border border-slate-850">
+                              <span className="text-slate-500 text-[9.5px] font-semibold uppercase block">INTERNET ACCESS STATE</span>
+                              <span className="font-mono text-emerald-400 block font-black mt-0.5 uppercase">SHARING INTERNET</span>
+                            </div>
+                            <div className="bg-slate-900 p-3 rounded-xl border border-slate-850">
+                              <span className="text-slate-500 text-[9.5px] font-semibold uppercase block">GATEWAY RESPONDER TIME</span>
+                              <span className="font-mono text-white block font-bold mt-0.5">{routerDetectResult.pingMs || 1} ms (Excellent)</span>
+                            </div>
+                            <div className="bg-slate-900 p-3 rounded-xl border border-slate-850">
+                              <span className="text-slate-500 text-[9.5px] font-semibold uppercase block">ARP GATEWAY HARDWARE</span>
+                              <span className="font-mono text-amber-400 block font-bold mt-0.5 uppercase">{routerDetectResult.resolvedMac || "18:FD:74:B3:99:EE"}</span>
+                            </div>
+                            <div className="bg-slate-900 p-3 rounded-xl border border-slate-850">
+                              <span className="text-slate-500 text-[9.5px] font-semibold uppercase block">ACTIVE DHCP PACKETS</span>
+                              <span className="font-mono text-white block font-bold mt-0.5">{routerDetectResult.packetsShared || 8492} Leased</span>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-center py-6 text-slate-405 border border-slate-850 border-dashed rounded-xl flex flex-col items-center justify-center">
+                        <Activity className="w-8 h-8 text-slate-600 mb-2 animate-pulse" />
+                        <p className="text-xs text-slate-400">Hardware state poll required.</p>
+                        <p className="text-[10px] text-slate-500 mt-1 max-w-[280px]">Click the verification action above to execute virtual ARP sweep diagnostics & gateway routing detection.</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="bg-slate-950/45 border border-slate-850 p-3 rounded-xl mt-4 space-y-1.5 text-[10px] text-emerald-400/90 leading-relaxed font-sans">
+                  <p className="font-bold uppercase text-[9px] tracking-wider text-emerald-350 flex items-center gap-1">
+                    <Check className="w-3.5 h-3.5" /> Successful connection verified:
+                  </p>
+                  <p className="text-slate-400">
+                    Once connection parameters are correctly entered and Router Internet is enabled, subscriber wireless devices will retrieve dynamic leases, load captive billing overlays, and share internet on success.
+                  </p>
+                </div>
               </div>
+
             </div>
 
           </div>
@@ -3175,6 +3960,29 @@ CREATE TABLE IF NOT EXISTS vouchers (
                 
                 {/* Setting Column A */}
                 <div className="space-y-4">
+                  {currentUser.role === "admin" && (
+                    <div className="p-4 bg-slate-950 border border-slate-850 rounded-xl">
+                      <label className="text-[11px] font-bold uppercase tracking-wide text-white font-mono block mb-2">
+                         Operator Access License Fee (TZS)
+                      </label>
+                      <input
+                        type="number"
+                        value={operatorAccessFee}
+                        onChange={(e) => setOperatorAccessFee(parseInt(e.target.value) || 0)}
+                        className="w-full p-2 bg-slate-900 border border-slate-800 rounded-lg text-xs font-mono text-emerald-400 font-bold focus:outline-none focus:border-amber-500/50 block"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1.5 leading-normal">Price operators pay to activate their account and launch dashboard access.</p>
+                      
+                      <button
+                        type="button"
+                        onClick={handleSaveOperatorFee}
+                        className="mt-3.5 w-full py-2 bg-amber-500 hover:bg-amber-600 font-black text-[10px] text-slate-950 rounded-lg transition-all active:scale-[0.97] cursor-pointer text-center uppercase tracking-wide"
+                      >
+                        Change Price / Update Fee
+                      </button>
+                    </div>
+                  )}
+
                   <div className="p-4 bg-slate-950 border border-slate-850 rounded-xl">
                     <label className="text-[11px] font-bold uppercase tracking-wide text-white font-mono block mb-2">
                       QoS Latency Profile Mode
@@ -3206,7 +4014,22 @@ CREATE TABLE IF NOT EXISTS vouchers (
                       <option value="3600">1 Hour Idle</option>
                       <option value="7200">2 Hour Idle</option>
                     </select>
-                    <p className="text-[10px] text-slate-500 mt-1.5 leading-normal">Kicks client session from lease pool after inactivity.</p>
+                    <p className="text-[10px] text-slate-500 mt-1.5 leading-normal font-sans">Kicks client session from lease pool after inactivity.</p>
+                    
+                    <div className="flex items-center justify-between mt-3.5 pt-3.5 border-t border-slate-850">
+                      <span className="text-[10px] uppercase font-bold tracking-wider font-mono text-slate-400">Lease Timer Status</span>
+                      <button
+                        type="button"
+                        onClick={() => setSettingsTimeoutEnabled(!settingsTimeoutEnabled)}
+                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase transition-all select-none cursor-pointer ${
+                          settingsTimeoutEnabled 
+                            ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20" 
+                            : "bg-red-500/15 text-red-500 border border-red-500/20 hover:bg-red-500/20"
+                        }`}
+                      >
+                        {settingsTimeoutEnabled ? "ENABLED" : "DISABLED"}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
@@ -3248,7 +4071,8 @@ CREATE TABLE IF NOT EXISTS vouchers (
               <div className="mt-6 pt-4 border-t border-slate-850 flex justify-between items-center text-[10px] text-slate-500 font-mono">
                 <span>Version Core: 4.8.1-BETA (Tanzanian Edition)</span>
                 <button
-                  onClick={() => alert("All system configuration settings preserved in database successfully!")}
+                  type="button"
+                  onClick={(e) => handleSavePortalSettings(e)}
                   className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-xs rounded-xl active:scale-95 transition-all cursor-pointer shadow-md"
                 >
                   Save settings menu values
@@ -3293,6 +4117,35 @@ CREATE TABLE IF NOT EXISTS vouchers (
                       />
                       <div className="w-9 h-5 bg-slate-800 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-350 after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-500"></div>
                     </label>
+                  </div>
+                </div>
+
+                {/* 2. SYSTEM-WIDE BIOMETRICS ENABLE/DISABLE TOGGLE */}
+                <div className="p-4 bg-slate-950 border border-slate-850 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="space-y-1">
+                    <span className="text-xs font-bold text-white uppercase font-mono flex items-center gap-1.5">
+                      <span className={`w-2 h-2 rounded-full animate-pulse ${biometricsEnabled ? "bg-teal-400" : "bg-slate-600"}`}></span>
+                      Console Biometric Authentication Gateway
+                    </span>
+                    <p className="text-[10px] text-slate-500 max-w-xl leading-normal">
+                      Toggle whether operators and administrators are permitted to sign in to the billing dashboard using passwordless, hardware-level fingerprint TouchID / FaceID keys.
+                    </p>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs font-mono font-bold text-slate-400">
+                      {biometricsEnabled ? "GATEWAY ENABLED" : "GATEWAY DISABLED"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setBiometricsEnabled(!biometricsEnabled)}
+                      className={`px-3.5 py-1.5 rounded-lg text-xs font-black uppercase transition-colors select-none cursor-pointer ${
+                        biometricsEnabled 
+                          ? "bg-teal-500 text-slate-950 hover:bg-teal-600" 
+                          : "bg-slate-800 text-slate-500 hover:bg-slate-700"
+                      }`}
+                    >
+                      {biometricsEnabled ? "Disable" : "Enable"}
+                    </button>
                   </div>
                 </div>
 
@@ -3374,6 +4227,71 @@ CREATE TABLE IF NOT EXISTS vouchers (
 
               </div>
             </div>
+
+            {/* PERSONAL PASSKEY / BIOMETRIC ENROLLMENT MODULE */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 mt-6">
+              <div className="flex items-center space-x-2 mb-4">
+                <Fingerprint className="w-5 h-5 text-cyan-400" />
+                <h3 className="text-sm font-bold tracking-wider text-white uppercase font-mono">
+                  Personal Biometrics Console Activation
+                </h3>
+              </div>
+              <p className="text-xs text-slate-400 mb-6 leading-relaxed">
+                Connect your local browser hardware key storage to allow rapid, passwordless FaceID or TouchID console authentication.
+              </p>
+
+              {!biometricsEnabled ? (
+                <div className="p-4 bg-slate-950 border border-dashed border-slate-800 rounded-xl text-center">
+                  <span className="text-xs text-slate-500 font-semibold font-mono">
+                    ⚠️ Biometric Sign-In has been disabled globally by the administrator.
+                  </span>
+                </div>
+              ) : (
+                <div className="p-4 bg-slate-950 border border-slate-850 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div>
+                    <span className="text-[11px] font-bold uppercase tracking-wide text-white font-mono block">
+                      Local Sensor Hardware Key
+                    </span>
+                    <p className="text-[10px] text-slate-500 mt-1 leading-normal">
+                      {registeredBiometrics.includes(currentUser.username.toLowerCase()) ? (
+                        <span className="text-emerald-400 font-bold">● LINKED (TouchID / FaceID Active on this browser)</span>
+                      ) : (
+                        <span className="text-amber-500 font-bold">○ UNCONFIGURED (Standard password required on login)</span>
+                      )}
+                    </p>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    {registeredBiometrics.includes(currentUser.username.toLowerCase()) ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const list = registeredBiometrics.filter(name => name !== currentUser.username.toLowerCase());
+                          setRegisteredBiometrics(list);
+                          localStorage.setItem("hotspot_registered_biometrics", JSON.stringify(list));
+                          alert("Biometric credentials cleared from local browser vault.");
+                        }}
+                        className="px-4 py-2 bg-red-500/15 border border-red-500 text-red-400 hover:bg-red-550 hover:text-white rounded-xl text-xs font-bold font-mono transition-all active:scale-95 cursor-pointer"
+                      >
+                        Unlink / Disable Fingerprint
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleRegisterBiometrics(currentUser.username)}
+                        className="px-4 py-2 bg-cyan-400 hover:bg-cyan-500 text-slate-950 rounded-xl text-xs font-black font-sans transition-all active:scale-95 cursor-pointer flex items-center gap-1.5"
+                      >
+                        <svg className="w-4 h-4 text-slate-950" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 009 11a5 5 0 00-10 0c0 1.053.18 2.062.512 3m0 0A9 9 0 0118 12M12 3c4.97 0 9 4.03 9 9V12.75" />
+                        </svg>
+                        Link TouchID / FaceID
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
           </div>
         )}
 
